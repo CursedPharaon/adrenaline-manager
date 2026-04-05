@@ -103,7 +103,7 @@ def extract_user_id(text, event):
     return None
 
 def get_nickname(user_id):
-    """Получает ник пользователя или его ID если ника нет"""
+    """Получает ник пользователя или None если нет"""
     if user_id in user_data and user_data[user_id].get("nickname"):
         return user_data[user_id]["nickname"]
     return None
@@ -120,6 +120,24 @@ def remove_nickname(user_id):
     if user_id in user_data and "nickname" in user_data[user_id]:
         del user_data[user_id]["nickname"]
         save_all()
+
+def get_username(user_id):
+    """Получает короткий username (@durov) или None"""
+    try:
+        user_info = vk.users.get(user_ids=user_id, fields='screen_name')
+        if user_info and user_info[0].get('screen_name'):
+            return user_info[0]['screen_name']
+    except:
+        pass
+    return None
+
+def get_user_link(user_id):
+    """Возвращает кликабельную ссылку на пользователя"""
+    username = get_username(user_id)
+    if username:
+        return f"@{username}"
+    else:
+        return f"[id{user_id}|пользователь]"
 
 # ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -233,7 +251,8 @@ for event in longpoll.listen():
                             send(peer_id, "❌ Ник не может быть длиннее 30 символов")
                         else:
                             set_nickname(target_id, new_nick)
-                            send(peer_id, f"✅ Пользователю [id{target_id}|] установлен ник: **{new_nick}**")
+                            user_link = get_user_link(target_id)
+                            send(peer_id, f"✅ Пользователю {user_link} установлен ник: **{new_nick}**")
                 else:
                     send(peer_id, "❌ Использование: !ник @пользователь НовыйНик")
             
@@ -242,19 +261,22 @@ for event in longpoll.listen():
                 target_id = extract_user_id(text, event)
                 if target_id:
                     remove_nickname(target_id)
-                    send(peer_id, f"✅ Ник пользователя [id{target_id}|] удален!")
+                    user_link = get_user_link(target_id)
+                    send(peer_id, f"✅ Ник пользователя {user_link} удален!")
                 else:
                     send(peer_id, "❌ Укажите пользователя через @ или ответьте на его сообщение")
             
-            # СПИСОК НИКОВ (только для владельца беседы)
+            # СПИСОК НИКОВ (только для владельца беседы) - С КЛИКАБЕЛЬНЫМИ USERNAME
             elif text_lower == "!списокников" and is_owner:
                 nicks_list = []
                 for uid, data in user_data.items():
                     if "nickname" in data:
-                        nicks_list.append(f"• [id{uid}|] → **{data['nickname']}**")
+                        user_link = get_user_link(uid)
+                        nicks_list.append(f"• {user_link} → **{data['nickname']}**")
                 
                 if nicks_list:
                     result = "📝 **Список ников в беседе:**\n\n" + "\n".join(nicks_list)
+                    result += "\n\n💡 *Нажми на @username, чтобы перейти в профиль*"
                 else:
                     result = "📝 Ников пока нет. Используй !ник @user Ник"
                 send(peer_id, result)
@@ -270,7 +292,8 @@ for event in longpoll.listen():
                             user_data[target_id] = {"role": 0, "warns": 0, "muted_until": 0}
                         user_data[target_id]["role"] = 100
                         save_all()
-                        send(peer_id, f"✅ [id{target_id}|Теперь администратор бота]")
+                        user_link = get_user_link(target_id)
+                        send(peer_id, f"✅ {user_link} теперь администратор бота")
                 else:
                     send(peer_id, "❌ Ответьте на сообщение пользователя или используйте @")
             
@@ -282,16 +305,17 @@ for event in longpoll.listen():
                         user_data[target_id] = {"role": 0, "warns": 0, "muted_until": 0}
                     user_data[target_id]["warns"] = user_data[target_id].get("warns", 0) + 1
                     warns = user_data[target_id]["warns"]
+                    user_link = get_user_link(target_id)
                     if warns >= 3:
                         try:
                             vk.messages.removeChatUser(chat_id=peer_id - 2000000000, user_id=target_id)
-                            send(peer_id, f"⚠️ [id{target_id}|Пользователь] получил 3 варна и был исключен!")
+                            send(peer_id, f"⚠️ {user_link} получил 3 варна и был исключен!")
                             if target_id in user_data:
                                 del user_data[target_id]
                         except:
                             send(peer_id, "❌ Ошибка при кике. У бота есть права администратора?")
                     else:
-                        send(peer_id, f"⚠️ [id{target_id}|Пользователь] получил предупреждение! ({warns}/3)")
+                        send(peer_id, f"⚠️ {user_link} получил предупреждение! ({warns}/3)")
                     save_all()
                 else:
                     send(peer_id, "❌ Ответьте на сообщение пользователя или используйте @")
@@ -309,7 +333,8 @@ for event in longpoll.listen():
                     mute_time = time.time() + (minutes * 60)
                     user_data[target_id]["muted_until"] = mute_time
                     save_all()
-                    send(peer_id, f"🔇 [id{target_id}|Пользователь] замьючен на {minutes} минут!")
+                    user_link = get_user_link(target_id)
+                    send(peer_id, f"🔇 {user_link} замьючен на {minutes} минут!")
                 else:
                     send(peer_id, "❌ Ответьте на сообщение пользователя или используйте @")
             
@@ -320,7 +345,8 @@ for event in longpoll.listen():
                     if target_id in user_data:
                         user_data[target_id]["muted_until"] = 0
                         save_all()
-                        send(peer_id, f"✅ [id{target_id}|Пользователь] размьючен!")
+                        user_link = get_user_link(target_id)
+                        send(peer_id, f"✅ {user_link} размьючен!")
                 else:
                     send(peer_id, "❌ Ответьте на сообщение пользователя")
             
@@ -330,7 +356,8 @@ for event in longpoll.listen():
                 if target_id:
                     try:
                         vk.messages.removeChatUser(chat_id=peer_id - 2000000000, user_id=target_id)
-                        send(peer_id, f"🚪 [id{target_id}|Пользователь] исключен из беседы!")
+                        user_link = get_user_link(target_id)
+                        send(peer_id, f"🚪 {user_link} исключен из беседы!")
                     except:
                         send(peer_id, "❌ Ошибка при кике. У бота есть права администратора?")
                 else:
