@@ -5,19 +5,18 @@ import time
 import re
 import json
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ================= КОНФИГУРАЦИЯ =================
-# Берем данные из переменных окружения Render
 GROUP_TOKEN = os.getenv("VK_TOKEN")
 GROUP_ID = int(os.getenv("VK_GROUP_ID"))
 BOT_OWNER_ID = int(os.getenv("BOT_OWNER_ID"))
-# ===============================================
 
-# Проверка, что все переменные заданы
 if not GROUP_TOKEN or not GROUP_ID or not BOT_OWNER_ID:
     print("❌ ОШИБКА: Не все переменные окружения заданы!")
-    print("Нужно задать: VK_TOKEN, VK_GROUP_ID, BOT_OWNER_ID")
     exit(1)
+# ===============================================
 
 # Инициализация VK API
 vk_session = vk_api.VkApi(token=GROUP_TOKEN)
@@ -89,9 +88,32 @@ def extract_user_id(text, event):
         return int(match.group(1))
     return None
 
-print("🤖 Бот запущен!")
+# ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'VK Bot is running!')
+    
+    def log_message(self, format, *args):
+        pass  # Отключаем логи веб-сервера
+
+def run_web_server():
+    port = int(os.environ.get('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"🌐 Веб-сервер запущен на порту {port}")
+    server.serve_forever()
+
+# Запускаем веб-сервер в отдельном потоке
+web_thread = threading.Thread(target=run_web_server, daemon=True)
+web_thread.start()
+
+# ================= ОСНОВНОЙ ЦИКЛ БОТА =================
+print("🤖 VK Chat Manager запущен!")
 print(f"📱 ID группы: {GROUP_ID}")
 print(f"👑 Владелец: {BOT_OWNER_ID}")
+print("✅ Бот готов к работе!")
 
 for event in longpoll.listen():
     if event.type == VkBotEventType.MESSAGE_NEW and event.from_chat:
@@ -162,7 +184,8 @@ for event in longpoll.listen():
                     try:
                         vk.messages.removeChatUser(chat_id=peer_id - 2000000000, user_id=target_id)
                         send(peer_id, f"⚠️ [id{target_id}|Кикнут за 3 варна]")
-                        del user_data[target_id]
+                        if target_id in user_data:
+                            del user_data[target_id]
                     except:
                         send(peer_id, "❌ Ошибка кика")
                 else:
