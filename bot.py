@@ -7,6 +7,7 @@ import json
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from collections import defaultdict
 
 # ================= КОНФИГУРАЦИЯ =================
 GROUP_TOKEN = os.getenv("VK_TOKEN")
@@ -44,6 +45,19 @@ def save_all():
     db["silence_mode"] = silence_mode
     save_data(db)
 
+# ЗАЩИТА ОТ ДУБЛИРОВАНИЯ - запоминаем обработанные сообщения
+processed_messages = defaultdict(float)
+MESSAGE_TIMEOUT = 5  # Не обрабатываем сообщение повторно в течение 5 секунд
+
+def is_message_processed(msg_id):
+    """Проверяет, обрабатывали ли мы уже это сообщение"""
+    current_time = time.time()
+    if msg_id in processed_messages:
+        if current_time - processed_messages[msg_id] < MESSAGE_TIMEOUT:
+            return True
+    processed_messages[msg_id] = current_time
+    return False
+
 def send(peer_id, text, reply_to=None):
     try:
         vk.messages.send(
@@ -52,6 +66,7 @@ def send(peer_id, text, reply_to=None):
             random_id=random.randint(1, 2**31),
             reply_to=reply_to
         )
+        print(f"✅ Отправлено: {text[:50]}")
     except Exception as e:
         print(f"Ошибка: {e}")
 
@@ -145,6 +160,12 @@ for event in longpoll.listen():
     if event.type != VkBotEventType.MESSAGE_NEW:
         continue
     
+    # ЗАЩИТА ОТ ДУБЛИРОВАНИЯ
+    msg_unique_id = f"{event.object.message['peer_id']}_{event.object.message['id']}"
+    if is_message_processed(msg_unique_id):
+        print(f"⚠️ Пропущен дубликат: {msg_unique_id}")
+        continue
+    
     # Личные сообщения
     if event.from_user:
         try:
@@ -167,6 +188,8 @@ for event in longpoll.listen():
     text_lower = text.lower()
     from_id = event.object.message['from_id']
     
+    print(f"📩 Сообщение {msg_id} от {from_id}: {text[:30]}")
+    
     # Проверка мута
     if is_muted(from_id):
         delete_message(peer_id, msg_id)
@@ -185,6 +208,8 @@ for event in longpoll.listen():
     access = get_access(peer_id, from_id)
     is_owner = is_chat_owner(peer_id, from_id)
     
+    print(f"⚡ Команда: {text}, доступ: {access}")
+    
     # ========== КОМАНДЫ ==========
     
     # !помощь
@@ -192,12 +217,11 @@ for event in longpoll.listen():
         send(peer_id, """🤖 **Adrenaline Manager**
 
 👑 **Админам:**
-!мут @user [мин] - Замутить (сообщения удаляются)
+!мут @user [мин] - Замутить
 !снятьмут @user - Снять мут
 !кик @user - Кикнуть
-!варн @user - Варн (3 варна = кик)
+!варн @user - Варн (3 = кик)
 !тишина - Режим тишины
-!роль @user 100 - Дать админку бота
 
 🌟 **Владельцу беседы:**
 !ник @user текст - Сменить ник
@@ -216,7 +240,7 @@ for event in longpoll.listen():
         nick_text = f"\n🏷️ Ник: {nick}" if nick else ""
         send(peer_id, f"📊 **Профиль**\nРоль: {role}\nВарны: {warns}/3\nМут: {muted}{nick_text}", msg_id)
     
-    # !ник (только владелец беседы)
+    # !ник
     elif text_lower.startswith("!ник") and is_owner:
         parts = text.split(maxsplit=2)
         if len(parts) < 3:
@@ -243,7 +267,7 @@ for event in longpoll.listen():
             save_all()
             send(peer_id, f"✅ Ник {get_link(target)} удален", msg_id)
         else:
-            send(peer_id, "❌ У пользователя нет ника", msg_id)
+            send(peer_id, "❌ Нет ника", msg_id)
     
     # !списокников
     elif text_lower == "!списокников" and is_owner:
@@ -254,12 +278,12 @@ for event in longpoll.listen():
         if nicks:
             send(peer_id, "📝 **Список ников:**\n\n" + "\n".join(nicks), msg_id)
         else:
-            send(peer_id, "📝 Ников нет. Используй !ник", msg_id)
+            send(peer_id, "📝 Ников нет", msg_id)
     
     # !роль
     elif text_lower.startswith("!роль") and access >= 100:
         if from_id != BOT_OWNER_ID:
-            send(peer_id, "❌ Только создатель бота", msg_id)
+            send(peer_id, "❌ Только создатель", msg_id)
         else:
             target = get_target_user(text, event)
             if not target:
@@ -269,7 +293,7 @@ for event in longpoll.listen():
                     user_data[target] = {"role": 0, "warns": 0, "muted_until": 0}
                 user_data[target]["role"] = 100
                 save_all()
-                send(peer_id, f"✅ {get_link(target)} теперь админ бота", msg_id)
+                send(peer_id, f"✅ {get_link(target)} теперь админ", msg_id)
     
     # !варн
     elif text_lower.startswith("!варн") and access >= 100:
@@ -285,9 +309,10 @@ for event in longpoll.listen():
                 try:
                     vk.messages.removeChatUser(chat_id=peer_id - 2000000000, user_id=target)
                     send(peer_id, f"⚠️ {get_link(target)} кикнут за 3 варна!", msg_id)
-                    del user_data[target]
+                    if target in user_data:
+                        del user_data[target]
                 except:
-                    send(peer_id, "❌ Ошибка кика. Бот админ?", msg_id)
+                    send(peer_id, "❌ Ошибка кика", msg_id)
             else:
                 send(peer_id, f"⚠️ {get_link(target)} варн {warns}/3", msg_id)
             save_all()
@@ -301,9 +326,7 @@ for event in longpoll.listen():
             minutes = 5
             numbers = re.findall(r'\d+', text)
             if numbers:
-                minutes = int(numbers[0])
-            if minutes > 60:
-                minutes = 60
+                minutes = min(int(numbers[0]), 60)
             if target not in user_data:
                 user_data[target] = {"role": 0, "warns": 0, "muted_until": 0}
             user_data[target]["muted_until"] = time.time() + (minutes * 60)
@@ -337,6 +360,6 @@ for event in longpoll.listen():
         silence_mode = not silence_mode
         save_all()
         if silence_mode:
-            send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе сообщения не-админов будут удаляться.", msg_id)
+            send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**", msg_id)
         else:
             send(peer_id, "🔈 **Тишина выключена**", msg_id)
