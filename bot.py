@@ -24,14 +24,12 @@ vk = None
 longpoll = None
 
 def init_vk():
-    """Инициализация VK сессии"""
     global vk_session, vk, longpoll
     vk_session = vk_api.VkApi(token=GROUP_TOKEN)
     vk = vk_session.get_api()
     longpoll = VkBotLongPoll(vk_session, GROUP_ID)
     print("✅ VK сессия инициализирована")
 
-# Инициализируем сразу
 init_vk()
 
 # База данных
@@ -52,6 +50,17 @@ user_data = data["users"]
 silence_mode = data["silence_mode"]
 muted_users = data["muted_users"]
 
+# Словарь ролей
+ROLES = {
+    0: "👤 Пользователь",
+    10: "🛡️ Помощник",
+    20: "🔧 Модератор",
+    30: "⚡ Администратор",
+    50: "👑 Главный админ",
+    80: "⭐ Руководитель",
+    100: "💎 Владелец"
+}
+
 def send(peer_id, text, reply_to=None):
     try:
         vk.messages.send(
@@ -64,6 +73,7 @@ def send(peer_id, text, reply_to=None):
         print(f"Ошибка отправки: {e}")
 
 def kick_user(chat_id, user_id):
+    """Кикает пользователя из беседы"""
     try:
         vk.messages.removeChatUser(chat_id=chat_id, user_id=user_id)
         return True
@@ -92,15 +102,37 @@ def is_chat_owner(peer_id, user_id):
     return False
 
 def get_access(peer_id, user_id):
+    """Получает уровень доступа пользователя"""
+    # Владелец бота (полный доступ)
     if user_id == BOT_OWNER_ID:
         return 100
-    if str(user_id) in user_data and user_data[str(user_id)].get("role") == 100:
-        return 100
+    # Проверяем роль в БД
+    if str(user_id) in user_data:
+        return user_data[str(user_id)].get("role", 0)
+    # Если админ ВК, даем роль 50
     if is_chat_admin(peer_id, user_id):
-        return 100
+        return 50
     return 0
 
+def get_role_name(role):
+    """Возвращает название роли по числу"""
+    return ROLES.get(role, "👤 Пользователь")
+
+def can_assign_role(giver_role, target_role):
+    """Проверяет, может ли выдающий выдать роль"""
+    # Нельзя выдать роль выше своей
+    if target_role >= giver_role:
+        return False
+    # Нельзя выдать роль 100 (только владелец бота)
+    if target_role == 100:
+        return False
+    # Выдавать роли могут только с уровнем 30+
+    if giver_role < 30:
+        return False
+    return True
+
 def is_user_muted(user_id):
+    """Проверяет, в муте ли пользователь"""
     if str(user_id) in muted_users:
         if muted_users[str(user_id)] > time.time():
             return True
@@ -110,13 +142,17 @@ def is_user_muted(user_id):
     return False
 
 def mute_user(user_id, minutes):
+    """Мутит пользователя на N минут"""
     muted_users[str(user_id)] = time.time() + (minutes * 60)
     save_data()
+    print(f"🔇 Пользователь {user_id} замьючен на {minutes} мин")
 
 def unmute_user(user_id):
+    """Снимает мут"""
     if str(user_id) in muted_users:
         del muted_users[str(user_id)]
         save_data()
+        print(f"✅ Пользователь {user_id} размьючен")
 
 def get_target_user(text, event):
     if event.object.message.get('reply_message'):
@@ -155,16 +191,16 @@ def run_web():
 
 threading.Thread(target=run_web, daemon=True).start()
 
-# ================= ОСНОВНОЙ ЦИКЛ С ПЕРЕПОДКЛЮЧЕНИЕМ =================
+# ================= ОСНОВНОЙ ЦИКЛ =================
 print("✅ Adrenaline Manager запущен!")
 print(f"👑 Владелец бота: {BOT_OWNER_ID}")
+print(f"📋 Система ролей: {ROLES}")
 
 last_processed = {}
 PROCESS_TIMEOUT = 3
 
 while True:
     try:
-        print("🔄 Подключение к LongPoll...")
         for event in longpoll.listen():
             if event.type != VkBotEventType.MESSAGE_NEW:
                 continue
@@ -180,7 +216,7 @@ while True:
                 try:
                     vk.messages.send(
                         user_id=event.object.message['from_id'],
-                        message="🤖 Я работаю только в беседах! Добавь меня в чат и дай права администратора.",
+                        message="🤖 Я работаю только в беседах!",
                         random_id=random.randint(1, 2**31)
                     )
                 except:
@@ -198,52 +234,65 @@ while True:
             from_id = event.object.message['from_id']
             chat_id = peer_id - 2000000000
             
-            # ПРОВЕРКА МУТА
+            # ========== ПРОВЕРКА МУТА (КИК) ==========
             if is_user_muted(from_id):
-                try:
-                    vk.messages.delete(message_ids=str(msg_id), peer_id=peer_id, delete_for_all=1)
-                except:
-                    pass
+                print(f"🔇 Мут {from_id} - кикаем")
+                kick_user(chat_id, from_id)
                 continue
             
-            # ПРОВЕРКА ТИШИНЫ
+            # ========== ПРОВЕРКА ТИШИНЫ (КИК) ==========
             if silence_mode:
                 user_access = get_access(peer_id, from_id)
-                if user_access < 100:
+                if user_access < 30:  # Только роли 30+ могут писать
+                    print(f"🔇 Тишина! Кикаем {from_id}")
                     kick_user(chat_id, from_id)
-                    send(peer_id, f"🔇 {get_link(from_id)} кикнут за нарушение тишины!")
                     continue
             
             # Только команды с !
             if not text_lower.startswith('!'):
                 continue
             
-            access = get_access(peer_id, from_id)
+            user_role = get_access(peer_id, from_id)
             is_owner = is_chat_owner(peer_id, from_id)
             
-            print(f"⚡ Команда: {text}, доступ: {access}")
+            print(f"⚡ Команда: {text}, роль: {user_role}")
             
             # ========== КОМАНДЫ ==========
             
             # !помощь
             if text_lower == "!помощь":
-                send(peer_id, """🤖 **Adrenaline Manager**
+                help_text = f"""🤖 **Adrenaline Manager**
 
 🔹 **Все могут:**
 !помощь - Это сообщение
 !профиль - Ваш профиль
+!роли - Список ролей
 
-🔹 **Админам (роль 100):**
-!мут @user [мин] - Замутить
+🔹 **Роли (30+ могут выдавать нижестоящие):**
+{chr(10).join([f'  {v}' for k, v in ROLES.items()])}
+
+🔹 **Команды для ролей 30+:**
+!выдатьроль @user [число] - Выдать роль
+!снятьроль @user - Снять роль
+!мут @user [мин] - Замутить (кик)
 !снятьмут @user - Снять мут
 !кик @user - Кикнуть
 !варн @user - Варн (3 = кик)
-!тишина - Вкл/выкл тишину
+!тишина - Вкл/выкл тишину (кик)
 
 🔹 **Владельцу беседы:**
 !ник @user текст - Сменить ник
 !удалитьник @user - Удалить ник
-!списокников - Список ников""", msg_id)
+!списокников - Список ников"""
+                send(peer_id, help_text, msg_id)
+                continue
+            
+            # !роли
+            if text_lower == "!роли":
+                roles_text = "📋 **Список ролей:**\n\n"
+                for role_num, role_name in ROLES.items():
+                    roles_text += f"{role_name} — {role_num}\n"
+                send(peer_id, roles_text, msg_id)
                 continue
             
             # !профиль
@@ -251,12 +300,53 @@ while True:
                 if str(from_id) not in user_data:
                     user_data[str(from_id)] = {"role": 0, "warns": 0}
                     save_data()
-                role = "Админ" if user_data[str(from_id)].get("role") == 100 else "Пользователь"
+                role_num = user_data[str(from_id)].get("role", 0)
+                role_name = get_role_name(role_num)
                 warns = user_data[str(from_id)].get("warns", 0)
                 muted = "Да" if is_user_muted(from_id) else "Нет"
                 nick = user_data[str(from_id)].get("nickname", "")
                 nick_text = f"\n🏷️ Ник: {nick}" if nick else ""
-                send(peer_id, f"📊 **Профиль**\nРоль: {role}\nВарны: {warns}/3\nМут: {muted}{nick_text}", msg_id)
+                send(peer_id, f"📊 **Профиль**\n⭐ Роль: {role_name} ({role_num})\n⚠️ Варны: {warns}/3\n🔇 Мут: {muted}{nick_text}", msg_id)
+                continue
+            
+            # !выдатьроль
+            if text_lower.startswith("!выдатьроль") and user_role >= 30:
+                parts = text.split()
+                if len(parts) < 3:
+                    send(peer_id, "❌ !выдатьроль @user [0,10,20,30,50,80,100]", msg_id)
+                else:
+                    target = get_target_user(text, event)
+                    if not target:
+                        send(peer_id, "❌ Укажите пользователя (@)", msg_id)
+                    else:
+                        try:
+                            new_role = int(parts[-1])
+                            if new_role not in ROLES:
+                                send(peer_id, f"❌ Роль {new_role} не существует! Доступны: {list(ROLES.keys())}", msg_id)
+                            elif not can_assign_role(user_role, new_role):
+                                send(peer_id, f"❌ Нельзя выдать роль {new_role} (выше вашей или нельзя выдавать)", msg_id)
+                            else:
+                                if str(target) not in user_data:
+                                    user_data[str(target)] = {"role": 0, "warns": 0}
+                                user_data[str(target)]["role"] = new_role
+                                save_data()
+                                send(peer_id, f"✅ {get_link(target)} получил роль: {get_role_name(new_role)}", msg_id)
+                        except ValueError:
+                            send(peer_id, "❌ Укажите число роли", msg_id)
+                continue
+            
+            # !снятьроль
+            if text_lower.startswith("!снятьроль") and user_role >= 30:
+                target = get_target_user(text, event)
+                if not target:
+                    send(peer_id, "❌ Укажите пользователя", msg_id)
+                else:
+                    if str(target) in user_data:
+                        user_data[str(target)]["role"] = 0
+                        save_data()
+                        send(peer_id, f"✅ Роль {get_link(target)} сброшена до пользователя", msg_id)
+                    else:
+                        send(peer_id, "❌ У пользователя нет роли", msg_id)
                 continue
             
             # !ник
@@ -302,24 +392,8 @@ while True:
                     send(peer_id, "📝 Ников нет", msg_id)
                 continue
             
-            # !роль
-            if text_lower.startswith("!роль") and access >= 100:
-                if from_id != BOT_OWNER_ID:
-                    send(peer_id, "❌ Только создатель бота", msg_id)
-                else:
-                    target = get_target_user(text, event)
-                    if not target:
-                        send(peer_id, "❌ Укажите пользователя", msg_id)
-                    else:
-                        if str(target) not in user_data:
-                            user_data[str(target)] = {"role": 0, "warns": 0}
-                        user_data[str(target)]["role"] = 100
-                        save_data()
-                        send(peer_id, f"✅ {get_link(target)} теперь админ бота", msg_id)
-                continue
-            
             # !варн
-            if text_lower.startswith("!варн") and access >= 100:
+            if text_lower.startswith("!варн") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
                     send(peer_id, "❌ Укажите пользователя", msg_id)
@@ -340,8 +414,8 @@ while True:
                     save_data()
                 continue
             
-            # !мут
-            if text_lower.startswith("!мут") and access >= 100:
+            # !мут (кик при нарушении)
+            if text_lower.startswith("!мут") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
                     send(peer_id, "❌ Укажите пользователя", msg_id)
@@ -351,11 +425,11 @@ while True:
                     if numbers:
                         minutes = min(int(numbers[0]), 60)
                     mute_user(target, minutes)
-                    send(peer_id, f"🔇 {get_link(target)} замьючен на {minutes} мин!", msg_id)
+                    send(peer_id, f"🔇 {get_link(target)} замьючен на {minutes} мин! При попытке написать - кик.", msg_id)
                 continue
             
             # !снятьмут
-            if text_lower.startswith("!снятьмут") and access >= 100:
+            if text_lower.startswith("!снятьмут") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
                     send(peer_id, "❌ Укажите пользователя", msg_id)
@@ -365,7 +439,7 @@ while True:
                 continue
             
             # !кик
-            if text_lower.startswith("!кик") and access >= 100:
+            if text_lower.startswith("!кик") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
                     send(peer_id, "❌ Укажите пользователя", msg_id)
@@ -377,11 +451,11 @@ while True:
                 continue
             
             # !тишина
-            if text_lower == "!тишина" and access >= 100:
+            if text_lower == "!тишина" and user_role >= 30:
                 silence_mode = not silence_mode
                 save_data()
                 if silence_mode:
-                    send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе, кто напишут, будут КИКНУТЫ!", msg_id)
+                    send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе, кто напишут (кроме ролей 30+), будут КИКНУТЫ!", msg_id)
                 else:
                     send(peer_id, "🔈 **Тишина выключена**", msg_id)
                 continue
@@ -393,4 +467,4 @@ while True:
         try:
             init_vk()
         except:
-            print("❌ Не удалось переподключиться, повторяем...")
+            print("❌ Не удалось переподключиться")
