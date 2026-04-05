@@ -134,18 +134,18 @@ for event in longpoll.listen():
             text_lower = text.lower()
             from_id = event.object.message['from_id']
             
-            # ИГНОРИРУЕМ ВСЕ СООБЩЕНИЯ, КРОМЕ КОМАНД
+            # 🔥 ГЛАВНОЕ: ИГНОРИРУЕМ ВСЕ, ЧТО НЕ НАЧИНАЕТСЯ С "!"
             if not text_lower.startswith('!'):
-                continue
+                continue  # ПРОСТО ПРОПУСКАЕМ, НИЧЕГО НЕ ОТВЕЧАЕМ
             
-            # Режим тишины
+            # Режим тишины (только для команд)
             if silence_mode and get_access_level(peer_id, from_id) < 100:
-                send(peer_id, "🔇 Режим тишины! Писать могут только администраторы.", reply_to=event.object.message['id'])
+                send(peer_id, "🔇 Режим тишины! Команды доступны только администраторам.", reply_to=event.object.message['id'])
                 continue
             
             # Проверка мута
             if is_muted(from_id):
-                send(peer_id, "🔇 Вы замьючены!", reply_to=event.object.message['id'])
+                send(peer_id, "🔇 Вы замьючены! Не можете использовать команды.", reply_to=event.object.message['id'])
                 continue
             
             access = get_access_level(peer_id, from_id)
