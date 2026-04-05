@@ -35,9 +35,10 @@ def save_data():
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({"users": user_data, "silence_mode": silence_mode, "muted_users": muted_users}, f, ensure_ascii=False, indent=2)
 
-user_data = load_data()["users"]
-silence_mode = load_data()["silence_mode"]
-muted_users = load_data()["muted_users"]
+data = load_data()
+user_data = data["users"]
+silence_mode = data["silence_mode"]
+muted_users = data["muted_users"]
 
 def send(peer_id, text, reply_to=None):
     try:
@@ -50,16 +51,13 @@ def send(peer_id, text, reply_to=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
-def delete_message(peer_id, message_id):
+def kick_user(chat_id, user_id):
+    """Кикает пользователя из беседы"""
     try:
-        vk.messages.delete(
-            message_ids=str(message_id),
-            peer_id=peer_id,
-            delete_for_all=1
-        )
+        vk.messages.removeChatUser(chat_id=chat_id, user_id=user_id)
         return True
     except Exception as e:
-        print(f"Ошибка удаления: {e}")
+        print(f"Ошибка кика: {e}")
         return False
 
 def is_chat_admin(peer_id, user_id):
@@ -148,6 +146,7 @@ threading.Thread(target=run_web, daemon=True).start()
 
 # ================= ОСНОВНОЙ ЦИКЛ =================
 print("✅ Adrenaline Manager запущен!")
+print(f"👑 Владелец бота: {BOT_OWNER_ID}")
 
 # Кэш для избежания дублирования
 last_processed = {}
@@ -168,7 +167,7 @@ for event in longpoll.listen():
         try:
             vk.messages.send(
                 user_id=event.object.message['from_id'],
-                message="🤖 Я работаю только в беседах!",
+                message="🤖 Я работаю только в беседах! Добавь меня в чат и дай права администратора.",
                 random_id=random.randint(1, 2**31)
             )
         except:
@@ -186,16 +185,26 @@ for event in longpoll.listen():
     from_id = event.object.message['from_id']
     chat_id = peer_id - 2000000000
     
-    # ========== ПРОВЕРКА МУТА (УДАЛЯЕМ СООБЩЕНИЕ) ==========
+    print(f"📩 {from_id}: {text[:30]}")
+    
+    # ========== ПРОВЕРКА МУТА ==========
     if is_user_muted(from_id):
-        delete_message(peer_id, msg_id)
+        print(f"🔇 Мут {from_id} - удаляем")
+        try:
+            vk.messages.delete(message_ids=str(msg_id), peer_id=peer_id, delete_for_all=1)
+        except:
+            pass
         continue
     
-    # ========== ПРОВЕРКА ТИШИНЫ (УДАЛЯЕМ СООБЩЕНИЯ НЕ-АДМИНОВ) ==========
+    # ========== ТИШИНА - КИКАЕМ НАРУШИТЕЛЕЙ ==========
     if silence_mode:
         user_access = get_access(peer_id, from_id)
         if user_access < 100:
-            delete_message(peer_id, msg_id)
+            print(f"🔇 Тишина! Кикаем {from_id}")
+            # Кикаем нарушителя
+            kick_user(chat_id, from_id)
+            # Отправляем уведомление
+            send(peer_id, f"🔇 {get_link(from_id)} кикнут за нарушение тишины!")
             continue
     
     # Только команды с !
@@ -205,9 +214,9 @@ for event in longpoll.listen():
     access = get_access(peer_id, from_id)
     is_owner = is_chat_owner(peer_id, from_id)
     
-    print(f"Команда: {text} от {from_id}, доступ: {access}")
+    print(f"⚡ Команда: {text}, доступ: {access}")
     
-    # ========== ОБРАБОТКА КОМАНД ==========
+    # ========== КОМАНДЫ ==========
     
     # !помощь
     if text_lower == "!помощь":
@@ -222,7 +231,7 @@ for event in longpoll.listen():
 !снятьмут @user - Снять мут
 !кик @user - Кикнуть
 !варн @user - Варн (3 = кик)
-!тишина - Вкл/выкл тишину
+!тишина - Вкл/выкл тишину (нарушители кикаются)
 
 🔹 **Владельцу беседы:**
 !ник @user текст - Сменить ник
@@ -243,11 +252,11 @@ for event in longpoll.listen():
         send(peer_id, f"📊 **Профиль**\nРоль: {role}\nВарны: {warns}/3\nМут: {muted}{nick_text}", msg_id)
         continue
     
-    # !ник (только владелец)
+    # !ник
     if text_lower.startswith("!ник") and is_owner:
         parts = text.split(maxsplit=2)
         if len(parts) < 3:
-            send(peer_id, "❌ Использование: !ник @user Никнейм", msg_id)
+            send(peer_id, "❌ !ник @user Никнейм", msg_id)
         else:
             target = get_target_user(text, event)
             if not target:
@@ -271,7 +280,7 @@ for event in longpoll.listen():
             save_data()
             send(peer_id, f"✅ Ник {get_link(target)} удален", msg_id)
         else:
-            send(peer_id, "❌ У пользователя нет ника", msg_id)
+            send(peer_id, "❌ Нет ника", msg_id)
         continue
     
     # !списокников
@@ -283,10 +292,10 @@ for event in longpoll.listen():
         if nicks:
             send(peer_id, "📝 **Список ников:**\n\n" + "\n".join(nicks), msg_id)
         else:
-            send(peer_id, "📝 Ников нет. Используйте !ник", msg_id)
+            send(peer_id, "📝 Ников нет", msg_id)
         continue
     
-    # !роль (только владелец бота)
+    # !роль
     if text_lower.startswith("!роль") and access >= 100:
         if from_id != BOT_OWNER_ID:
             send(peer_id, "❌ Только создатель бота", msg_id)
@@ -313,13 +322,12 @@ for event in longpoll.listen():
             user_data[str(target)]["warns"] = user_data[str(target)].get("warns", 0) + 1
             warns = user_data[str(target)]["warns"]
             if warns >= 3:
-                try:
-                    vk.messages.removeChatUser(chat_id=chat_id, user_id=target)
+                if kick_user(chat_id, target):
                     send(peer_id, f"⚠️ {get_link(target)} кикнут за 3 варна!", msg_id)
                     if str(target) in user_data:
                         del user_data[str(target)]
-                except:
-                    send(peer_id, "❌ Ошибка кика. Бот админ?", msg_id)
+                else:
+                    send(peer_id, "❌ Ошибка кика", msg_id)
             else:
                 send(peer_id, f"⚠️ {get_link(target)} варн {warns}/3", msg_id)
             save_data()
@@ -355,10 +363,9 @@ for event in longpoll.listen():
         if not target:
             send(peer_id, "❌ Укажите пользователя", msg_id)
         else:
-            try:
-                vk.messages.removeChatUser(chat_id=chat_id, user_id=target)
+            if kick_user(chat_id, target):
                 send(peer_id, f"🚪 {get_link(target)} кикнут!", msg_id)
-            except:
+            else:
                 send(peer_id, "❌ Ошибка. Бот админ?", msg_id)
         continue
     
@@ -367,7 +374,7 @@ for event in longpoll.listen():
         silence_mode = not silence_mode
         save_data()
         if silence_mode:
-            send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе сообщения не-админов будут удаляться.", msg_id)
+            send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе, кто напишут сообщение, будут КИКНУТЫ!", msg_id)
         else:
             send(peer_id, "🔈 **Тишина выключена**", msg_id)
         continue
