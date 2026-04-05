@@ -39,7 +39,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {"users": {}, "silence_mode": False, "muted_users": {}}
+    return {"users": {}, "silence_mode": {}, "muted_users": {}}
 
 def save_data():
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -47,8 +47,8 @@ def save_data():
 
 data = load_data()
 user_data = data["users"]
-silence_mode = data["silence_mode"]
-muted_users = data["muted_users"]
+silence_mode = data.get("silence_mode", {})  # silence_mode привязан к peer_id
+muted_users = data.get("muted_users", {})    # muted_users привязан к peer_id
 
 # Словарь ролей
 ROLES = {
@@ -103,13 +103,10 @@ def is_chat_owner(peer_id, user_id):
 
 def get_access(peer_id, user_id):
     """Получает уровень доступа пользователя"""
-    # Владелец бота (полный доступ)
     if user_id == BOT_OWNER_ID:
         return 100
-    # Проверяем роль в БД
     if str(user_id) in user_data:
         return user_data[str(user_id)].get("role", 0)
-    # Если админ ВК, даем роль 50
     if is_chat_admin(peer_id, user_id):
         return 50
     return 0
@@ -120,39 +117,39 @@ def get_role_name(role):
 
 def can_assign_role(giver_role, target_role):
     """Проверяет, может ли выдающий выдать роль"""
-    # Нельзя выдать роль выше своей
     if target_role >= giver_role:
         return False
-    # Нельзя выдать роль 100 (только владелец бота)
     if target_role == 100:
         return False
-    # Выдавать роли могут только с уровнем 30+
     if giver_role < 30:
         return False
     return True
 
-def is_user_muted(user_id):
-    """Проверяет, в муте ли пользователь"""
-    if str(user_id) in muted_users:
-        if muted_users[str(user_id)] > time.time():
+def is_user_muted(peer_id, user_id):
+    """Проверяет, в муте ли пользователь в КОНКРЕТНОЙ беседе"""
+    key = f"{peer_id}_{user_id}"
+    if key in muted_users:
+        if muted_users[key] > time.time():
             return True
         else:
-            del muted_users[str(user_id)]
+            del muted_users[key]
             save_data()
     return False
 
-def mute_user(user_id, minutes):
-    """Мутит пользователя на N минут"""
-    muted_users[str(user_id)] = time.time() + (minutes * 60)
+def mute_user(peer_id, user_id, minutes):
+    """Мутит пользователя в КОНКРЕТНОЙ беседе на N минут"""
+    key = f"{peer_id}_{user_id}"
+    muted_users[key] = time.time() + (minutes * 60)
     save_data()
-    print(f"🔇 Пользователь {user_id} замьючен на {minutes} мин")
+    print(f"🔇 Пользователь {user_id} замьючен в беседе {peer_id} на {minutes} мин")
 
-def unmute_user(user_id):
-    """Снимает мут"""
-    if str(user_id) in muted_users:
-        del muted_users[str(user_id)]
+def unmute_user(peer_id, user_id):
+    """Снимает мут в КОНКРЕТНОЙ беседе"""
+    key = f"{peer_id}_{user_id}"
+    if key in muted_users:
+        del muted_users[key]
         save_data()
-        print(f"✅ Пользователь {user_id} размьючен")
+        print(f"✅ Пользователь {user_id} размьючен в беседе {peer_id}")
 
 def get_target_user(text, event):
     if event.object.message.get('reply_message'):
@@ -234,17 +231,17 @@ while True:
             from_id = event.object.message['from_id']
             chat_id = peer_id - 2000000000
             
-            # ========== ПРОВЕРКА МУТА (КИК) ==========
-            if is_user_muted(from_id):
-                print(f"🔇 Мут {from_id} - кикаем")
+            # ========== ПРОВЕРКА МУТА (КИК) - ТОЛЬКО ДЛЯ ЭТОЙ БЕСЕДЫ ==========
+            if is_user_muted(peer_id, from_id):
+                print(f"🔇 Мут {from_id} в беседе {peer_id} - кикаем")
                 kick_user(chat_id, from_id)
                 continue
             
             # ========== ПРОВЕРКА ТИШИНЫ (КИК) ==========
-            if silence_mode:
+            if str(peer_id) in silence_mode and silence_mode[str(peer_id)]:
                 user_access = get_access(peer_id, from_id)
-                if user_access < 30:  # Только роли 30+ могут писать
-                    print(f"🔇 Тишина! Кикаем {from_id}")
+                if user_access < 30:
+                    print(f"🔇 Тишина в беседе {peer_id}! Кикаем {from_id}")
                     kick_user(chat_id, from_id)
                     continue
             
@@ -255,7 +252,7 @@ while True:
             user_role = get_access(peer_id, from_id)
             is_owner = is_chat_owner(peer_id, from_id)
             
-            print(f"⚡ Команда: {text}, роль: {user_role}")
+            print(f"⚡ Команда: {text}, роль: {user_role}, беседа: {peer_id}")
             
             # ========== КОМАНДЫ ==========
             
@@ -269,12 +266,12 @@ while True:
 !роли - Список ролей
 
 🔹 **Роли (30+ могут выдавать нижестоящие):**
-{chr(10).join([f'  {v}' for k, v in ROLES.items()])}
+{chr(10).join([f'  {v} — {k}' for k, v in ROLES.items()])}
 
 🔹 **Команды для ролей 30+:**
 !выдатьроль @user [число] - Выдать роль
 !снятьроль @user - Снять роль
-!мут @user [мин] - Замутить (кик)
+!мут @user [минуты] - Замутить (кик)
 !снятьмут @user - Снять мут
 !кик @user - Кикнуть
 !варн @user - Варн (3 = кик)
@@ -303,7 +300,7 @@ while True:
                 role_num = user_data[str(from_id)].get("role", 0)
                 role_name = get_role_name(role_num)
                 warns = user_data[str(from_id)].get("warns", 0)
-                muted = "Да" if is_user_muted(from_id) else "Нет"
+                muted = "Да" if is_user_muted(peer_id, from_id) else "Нет"
                 nick = user_data[str(from_id)].get("nickname", "")
                 nick_text = f"\n🏷️ Ник: {nick}" if nick else ""
                 send(peer_id, f"📊 **Профиль**\n⭐ Роль: {role_name} ({role_num})\n⚠️ Варны: {warns}/3\n🔇 Мут: {muted}{nick_text}", msg_id)
@@ -414,7 +411,7 @@ while True:
                     save_data()
                 continue
             
-            # !мут (кик при нарушении)
+            # !мут - ПРИВЯЗАН К КОНКРЕТНОЙ БЕСЕДЕ
             if text_lower.startswith("!мут") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -423,19 +420,24 @@ while True:
                     minutes = 5
                     numbers = re.findall(r'\d+', text)
                     if numbers:
-                        minutes = min(int(numbers[0]), 60)
-                    mute_user(target, minutes)
-                    send(peer_id, f"🔇 {get_link(target)} замьючен на {minutes} мин! При попытке написать - кик.", msg_id)
+                        minutes = int(numbers[0])
+                    if minutes <= 0:
+                        minutes = 1
+                    if minutes > 10080:
+                        minutes = 10080
+                        send(peer_id, f"⚠️ Максимальный мут - 7 дней. Установлено 7 дней.", msg_id)
+                    mute_user(peer_id, target, minutes)
+                    send(peer_id, f"🔇 {get_link(target)} замьючен в ЭТОЙ беседе на {minutes} мин! При попытке написать - кик.", msg_id)
                 continue
             
-            # !снятьмут
+            # !снятьмут - ПРИВЯЗАН К КОНКРЕТНОЙ БЕСЕДЕ
             if text_lower.startswith("!снятьмут") and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
                     send(peer_id, "❌ Укажите пользователя", msg_id)
                 else:
-                    unmute_user(target)
-                    send(peer_id, f"✅ {get_link(target)} размьючен", msg_id)
+                    unmute_user(peer_id, target)
+                    send(peer_id, f"✅ {get_link(target)} размьючен в ЭТОЙ беседе", msg_id)
                 continue
             
             # !кик
@@ -450,11 +452,13 @@ while True:
                         send(peer_id, "❌ Ошибка. Бот админ?", msg_id)
                 continue
             
-            # !тишина
+            # !тишина - ПРИВЯЗАНА К КОНКРЕТНОЙ БЕСЕДЕ
             if text_lower == "!тишина" and user_role >= 30:
-                silence_mode = not silence_mode
+                if str(peer_id) not in silence_mode:
+                    silence_mode[str(peer_id)] = False
+                silence_mode[str(peer_id)] = not silence_mode[str(peer_id)]
                 save_data()
-                if silence_mode:
+                if silence_mode[str(peer_id)]:
                     send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nВсе, кто напишут (кроме ролей 30+), будут КИКНУТЫ!", msg_id)
                 else:
                     send(peer_id, "🔈 **Тишина выключена**", msg_id)
