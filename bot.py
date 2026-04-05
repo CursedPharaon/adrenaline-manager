@@ -55,6 +55,7 @@ def send(peer_id, text, reply_to=None):
     vk.messages.send(**params)
 
 def is_vk_chat_admin(peer_id, user_id):
+    """Проверяет, является ли пользователь админом/владельцем беседы ВК"""
     try:
         members = vk.messages.getConversationMembers(peer_id=peer_id)
         for member in members['items']:
@@ -64,11 +65,25 @@ def is_vk_chat_admin(peer_id, user_id):
         pass
     return False
 
+def is_vk_chat_owner(peer_id, user_id):
+    """Проверяет, является ли пользователь владельцем беседы ВК"""
+    try:
+        members = vk.messages.getConversationMembers(peer_id=peer_id)
+        for member in members['items']:
+            if member['member_id'] == user_id:
+                return member.get('is_owner', False)
+    except:
+        pass
+    return False
+
 def get_access_level(peer_id, user_id):
+    # Владелец бота (полный доступ)
     if user_id == BOT_OWNER_ID:
         return 100
+    # Проверяем роль в нашей БД
     if user_id in user_data and user_data[user_id].get("role", 0) == 100:
         return 100
+    # Проверяем, админ ли он беседы ВК
     if is_vk_chat_admin(peer_id, user_id):
         return 100
     return 0
@@ -87,13 +102,32 @@ def extract_user_id(text, event):
         return int(match.group(1))
     return None
 
+def get_nickname(user_id):
+    """Получает ник пользователя или его ID если ника нет"""
+    if user_id in user_data and user_data[user_id].get("nickname"):
+        return user_data[user_id]["nickname"]
+    return None
+
+def set_nickname(user_id, nick):
+    """Устанавливает ник пользователя"""
+    if user_id not in user_data:
+        user_data[user_id] = {"role": 0, "warns": 0, "muted_until": 0}
+    user_data[user_id]["nickname"] = nick
+    save_all()
+
+def remove_nickname(user_id):
+    """Удаляет ник пользователя"""
+    if user_id in user_data and "nickname" in user_data[user_id]:
+        del user_data[user_id]["nickname"]
+        save_all()
+
 # ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b'VK Bot is running!')
+        self.wfile.write(b'Adrenaline Manager Bot is running!')
     
     def log_message(self, format, *args):
         pass
@@ -107,9 +141,9 @@ web_thread = threading.Thread(target=run_web_server, daemon=True)
 web_thread.start()
 
 # ================= ОСНОВНОЙ ЦИКЛ БОТА =================
-print("🤖 VK Chat Manager запущен!")
+print("🤖 Adrenaline Manager запущен!")
 print(f"📱 ID группы: {GROUP_ID}")
-print(f"👑 Владелец: {BOT_OWNER_ID}")
+print(f"👑 Владелец бота: {BOT_OWNER_ID}")
 print("✅ Бот готов к работе!")
 
 for event in longpoll.listen():
@@ -120,7 +154,7 @@ for event in longpoll.listen():
             try:
                 vk.messages.send(
                     user_id=user_id,
-                    message="🤖 Привет! Я работаю только в беседах.\n\nДобавь меня в беседу, дай права администратора и напиши !помощь",
+                    message="🤖 Привет! Я Adrenaline Manager. Я работаю только в беседах.\n\nДобавь меня в беседу, дай права администратора и напиши !помощь",
                     random_id=random.randint(1, 2**31)
                 )
             except:
@@ -134,11 +168,11 @@ for event in longpoll.listen():
             text_lower = text.lower()
             from_id = event.object.message['from_id']
             
-            # 🔥 ГЛАВНОЕ: ИГНОРИРУЕМ ВСЕ, ЧТО НЕ НАЧИНАЕТСЯ С "!"
+            # Игнорируем всё, что не начинается с "!"
             if not text_lower.startswith('!'):
-                continue  # ПРОСТО ПРОПУСКАЕМ, НИЧЕГО НЕ ОТВЕЧАЕМ
+                continue
             
-            # Режим тишины (только для команд)
+            # Режим тишины
             if silence_mode and get_access_level(peer_id, from_id) < 100:
                 send(peer_id, "🔇 Режим тишины! Команды доступны только администраторам.", reply_to=event.object.message['id'])
                 continue
@@ -149,12 +183,13 @@ for event in longpoll.listen():
                 continue
             
             access = get_access_level(peer_id, from_id)
+            is_owner = is_vk_chat_owner(peer_id, from_id)  # Владелец беседы ВК
             
             # === КОМАНДЫ БОТА ===
             
             # ПОМОЩЬ
             if text_lower == "!помощь":
-                help_text = """🤖 **VK Chat Manager - Команды**
+                help_text = """🤖 **Adrenaline Manager - Команды**
 
 👑 **Админ-команды (роль 100):**
 !варн @user - Выдать варн (3 варна = кик)
@@ -164,8 +199,10 @@ for event in longpoll.listen():
 !тишина - Вкл/выкл режим тишины
 !снятьмут @user - Снять мут
 
-🌟 **Владелец бота (только вы):**
-!ник Новое название - Сменить название чата
+🌟 **Владелец беседы ВК:**
+!ник @user Новый ник - Сменить ник пользователя
+!удалитьник @user - Удалить ник пользователя
+!списокников - Показать все ники в беседе
 
 📌 **Совет:** Ответьте на сообщение пользователя или используйте @упоминание"""
                 send(peer_id, help_text)
@@ -178,7 +215,49 @@ for event in longpoll.listen():
                 role = "👑 Админ бота" if user_data[from_id].get("role", 0) == 100 else "👤 Пользователь"
                 warns = user_data[from_id].get("warns", 0)
                 muted = "Да" if is_muted(from_id) else "Нет"
-                send(peer_id, f"📊 **Ваш профиль**\n⭐ Роль: {role}\n⚠️ Варны: {warns}/3\n🔇 Мут: {muted}", reply_to=event.object.message['id'])
+                nick = get_nickname(from_id)
+                nick_text = f"\n🏷️ Ник: {nick}" if nick else ""
+                send(peer_id, f"📊 **Ваш профиль**\n⭐ Роль: {role}\n⚠️ Варны: {warns}/3\n🔇 Мут: {muted}{nick_text}", reply_to=event.object.message['id'])
+            
+            # НИК (только для владельца беседы)
+            elif text_lower.startswith("!ник") and is_owner:
+                # Формат: !ник @user НовыйНик
+                parts = text.split(maxsplit=2)
+                if len(parts) >= 3:
+                    target_id = extract_user_id(text, event)
+                    if not target_id:
+                        send(peer_id, "❌ Укажите пользователя через @ или ответьте на его сообщение")
+                    else:
+                        new_nick = parts[2].strip()
+                        if len(new_nick) > 30:
+                            send(peer_id, "❌ Ник не может быть длиннее 30 символов")
+                        else:
+                            set_nickname(target_id, new_nick)
+                            send(peer_id, f"✅ Пользователю [id{target_id}|] установлен ник: **{new_nick}**")
+                else:
+                    send(peer_id, "❌ Использование: !ник @пользователь НовыйНик")
+            
+            # УДАЛИТЬ НИК (только для владельца беседы)
+            elif text_lower.startswith("!удалитьник") and is_owner:
+                target_id = extract_user_id(text, event)
+                if target_id:
+                    remove_nickname(target_id)
+                    send(peer_id, f"✅ Ник пользователя [id{target_id}|] удален!")
+                else:
+                    send(peer_id, "❌ Укажите пользователя через @ или ответьте на его сообщение")
+            
+            # СПИСОК НИКОВ (только для владельца беседы)
+            elif text_lower == "!списокников" and is_owner:
+                nicks_list = []
+                for uid, data in user_data.items():
+                    if "nickname" in data:
+                        nicks_list.append(f"• [id{uid}|] → **{data['nickname']}**")
+                
+                if nicks_list:
+                    result = "📝 **Список ников в беседе:**\n\n" + "\n".join(nicks_list)
+                else:
+                    result = "📝 Ников пока нет. Используй !ник @user Ник"
+                send(peer_id, result)
             
             # РОЛЬ (выдача админки бота)
             elif text_lower.startswith("!роль") and access >= 100:
@@ -263,15 +342,3 @@ for event in longpoll.listen():
                 save_all()
                 status = "включен 🔇" if silence_mode else "выключен 🔈"
                 send(peer_id, f"Режим тишины {status}")
-            
-            # НИК (только владелец бота)
-            elif text_lower.startswith("!ник") and from_id == BOT_OWNER_ID:
-                new_title = text[4:].strip()
-                if new_title:
-                    try:
-                        vk.messages.editChat(chat_id=peer_id - 2000000000, title=new_title)
-                        send(peer_id, f"✅ Название беседы изменено на: {new_title}")
-                    except:
-                        send(peer_id, "❌ Ошибка. У бота есть права администратора?")
-                else:
-                    send(peer_id, "❌ Введите новое название после !ник")
