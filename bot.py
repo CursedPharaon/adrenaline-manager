@@ -3,10 +3,32 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import random
 import time
 import re
-import json
+import jsonfrom http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+PORT = int(os.environ.get("PORT", 10000))
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        # Отключаем логи веб-сервера, чтобы не спамить
+        return
+
+def run_http_server():
+    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    server.serve_forever()
+
+# Запускаем HTTP-сервер в отдельном потоке
+threading.Thread(target=run_http_server, daemon=True).start()
 import os
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandlerх
+
+
 
 # ================= КОНФИГУРАЦИЯ =================
 GROUP_TOKEN = os.getenv("VK_TOKEN")
