@@ -74,6 +74,7 @@ VIP_PRICES = {
 BONUS_RANGE = (50, 500)
 
 def init_user(uid):
+    """Инициализирует пользователя в БД"""
     uid_str = str(uid)
     if uid_str not in user_data:
         user_data[uid_str] = {
@@ -84,6 +85,8 @@ def init_user(uid):
             "nickname": ""
         }
         save_data()
+        print(f"✅ Создан новый пользователь: {uid_str}")
+    return user_data[uid_str]
 
 def get_money(uid):
     init_user(uid)
@@ -91,9 +94,12 @@ def get_money(uid):
 
 def add_money(uid, amount):
     init_user(uid)
-    user_data[str(uid)]["money"] = get_money(uid) + amount
+    current = get_money(uid)
+    new_amount = current + amount
+    user_data[str(uid)]["money"] = new_amount
     save_data()
-    return user_data[str(uid)]["money"]
+    print(f"💰 {uid} +{amount} = {new_amount}")
+    return new_amount
 
 def remove_money(uid, amount):
     init_user(uid)
@@ -101,6 +107,7 @@ def remove_money(uid, amount):
     if current >= amount:
         user_data[str(uid)]["money"] = current - amount
         save_data()
+        print(f"💰 {uid} -{amount} = {user_data[str(uid)]['money']}")
         return True
     return False
 
@@ -122,6 +129,7 @@ def set_vip(uid, days):
     new_until = max(current_until, time.time()) + (days * 86400)
     user_data[str(uid)]["vip_until"] = new_until
     save_data()
+    print(f"💎 {uid} купил VIP на {days} дней до {new_until}")
     return new_until
 
 def is_vip_chat(peer_id):
@@ -151,9 +159,10 @@ def send(peer_id, text, reply_to=None):
             random_id=random.randint(1, 2**31),
             reply_to=reply_to
         )
+        print(f"✅ Отправлено в {peer_id}: {text[:50]}")
         return True
     except Exception as e:
-        print(f"Ошибка отправки: {e}")
+        print(f"❌ Ошибка отправки: {e}")
         return False
 
 def kick_user(chat_id, user_id):
@@ -306,6 +315,7 @@ while True:
             from_id = event.object.message['from_id']
             chat_id = peer_id - 2000000000
             
+            # Инициализируем пользователя если новый
             init_user(from_id)
             
             # Проверка мута и тишины для НЕ команд
@@ -324,7 +334,6 @@ while True:
             if not command_full:
                 continue
             
-            # Разделяем команду и аргументы
             parts = command_full.split()
             cmd = parts[0]
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
@@ -345,23 +354,32 @@ while True:
                 money = get_money(from_id)
                 vip_status = "✅ Да" if is_vip(from_id) else "❌ Нет"
                 vip_days = get_vip_days_left(from_id)
-                vip_text = f" ({vip_days} дн.)" if vip_days > 0 else ""
+                vip_text = f" (осталось {vip_days} дн.)" if vip_days > 0 else ""
                 nick_text = f"\n🏷️ Ник: {nick}" if nick else ""
-                send(peer_id, f"📊 **Ваш профиль**\n⭐ Роль: {role_name} ({role_num})\n⚠️ Варны: {warns}/3\n🔇 Мут: {muted}{nick_text}\n💰 Деньги: {money} монет\n💎 VIP: {vip_status}{vip_text}", msg_id)
+                
+                profile_text = f"""📊 **Ваш профиль**
+
+⭐ Роль: {role_name} ({role_num})
+⚠️ Варны: {warns}/3
+🔇 Мут: {muted}{nick_text}
+💰 Деньги: {money} монет
+💎 VIP: {vip_status}{vip_text}"""
+                send(peer_id, profile_text, msg_id)
                 continue
             
             # !бонус
             if cmd == "бонус":
                 if can_use_bonus(from_id):
                     bonus = random.randint(BONUS_RANGE[0], BONUS_RANGE[1])
+                    
                     # Бонус для VIP беседы
                     if is_vip_chat(peer_id):
                         bonus = int(bonus * 1.2)
                         add_money(from_id, bonus)
-                        send(peer_id, f"🎁 **Бонус получен!** (VIP беседа +20%)\n\n+{bonus} монет\n💰 Всего: {get_money(from_id)} монет\n\nСледующий бонус через 1 час.", msg_id)
+                        send(peer_id, f"🎁 **Бонус получен!** (VIP беседа +20%)\n\n+{bonus} монет\n💰 Всего: {get_money(from_id)} монет\n\n⏰ Следующий бонус через 1 час.", msg_id)
                     else:
                         add_money(from_id, bonus)
-                        send(peer_id, f"🎁 **Бонус получен!**\n\n+{bonus} монет\n💰 Всего: {get_money(from_id)} монет\n\nСледующий бонус через 1 час.", msg_id)
+                        send(peer_id, f"🎁 **Бонус получен!**\n\n+{bonus} монет\n💰 Всего: {get_money(from_id)} монет\n\n⏰ Следующий бонус через 1 час.", msg_id)
                     set_bonus_used(from_id)
                 else:
                     last = last_bonus.get(str(from_id), 0)
@@ -371,7 +389,7 @@ while True:
                     send(peer_id, f"⏰ Бонус еще не доступен!\nПодождите {minutes} мин {seconds} сек.", msg_id)
                 continue
             
-            # !вип (меню покупки)
+            # !вип - меню покупки
             if cmd == "вип":
                 vip_text = "💎 **Купить VIP статус**\n\n"
                 for days, price in VIP_PRICES.items():
@@ -388,7 +406,7 @@ while True:
                     try:
                         days = int(args.split()[0])
                         if days not in VIP_PRICES:
-                            send(peer_id, f"❌ Доступные дни: 1, 7, 30", msg_id)
+                            send(peer_id, "❌ Доступные дни: 1, 7, 30", msg_id)
                         else:
                             price = VIP_PRICES[days]
                             if remove_money(from_id, price):
@@ -396,7 +414,7 @@ while True:
                                 send(peer_id, f"✅ Вы купили VIP на {days} дней!\n💰 Осталось: {get_money(from_id)} монет", msg_id)
                             else:
                                 send(peer_id, f"❌ Недостаточно монет! Нужно: {price}, у вас: {get_money(from_id)}", msg_id)
-                    except:
+                    except ValueError:
                         send(peer_id, "❌ Укажите количество дней (1, 7 или 30)", msg_id)
                 continue
             
@@ -407,7 +425,7 @@ while True:
                 else:
                     target = get_target_user(text, event)
                     if not target:
-                        send(peer_id, "❌ Укажите пользователя (@)", msg_id)
+                        send(peer_id, "❌ Укажите пользователя (@ или ответом)", msg_id)
                     else:
                         try:
                             amount = int(args.split()[-1])
@@ -418,11 +436,11 @@ while True:
                                 send(peer_id, f"✅ Перевод выполнен!\n💰 {get_link(from_id)} перевел {amount} монет {get_link(target)}", msg_id)
                             else:
                                 send(peer_id, f"❌ Недостаточно монет! У вас: {get_money(from_id)}", msg_id)
-                        except:
+                        except ValueError:
                             send(peer_id, "❌ Укажите сумму числом", msg_id)
                 continue
             
-            # !пополнить (только владелец)
+            # !пополнить (только владелец бота)
             if cmd == "пополнить" and from_id == BOT_OWNER_ID:
                 if not args:
                     send(peer_id, "❌ Использование: !пополнить [сумма] или !пополнить @user [сумма]", msg_id)
@@ -433,18 +451,18 @@ while True:
                             amount = int(args.split()[-1])
                             add_money(target, amount)
                             send(peer_id, f"✅ {get_link(target)} пополнен на {amount} монет!\n💰 Теперь у него: {get_money(target)} монет", msg_id)
-                        except:
+                        except ValueError:
                             send(peer_id, "❌ Укажите сумму числом", msg_id)
                     else:
                         try:
                             amount = int(args.split()[0])
                             add_money(from_id, amount)
                             send(peer_id, f"✅ Вы пополнили баланс на {amount} монет!\n💰 Теперь у вас: {get_money(from_id)} монет", msg_id)
-                        except:
+                        except ValueError:
                             send(peer_id, "❌ Укажите сумму числом", msg_id)
                 continue
             
-            # !випбеседа (только владелец)
+            # !випбеседа (только владелец бота)
             if cmd == "випбеседа" and from_id == BOT_OWNER_ID:
                 if is_vip_chat(peer_id):
                     set_vip_chat(peer_id, False)
@@ -456,15 +474,15 @@ while True:
             
             # ========== ОСТАЛЬНЫЕ КОМАНДЫ ==========
             
-            # помощь
+            # !помощь
             if cmd == "помощь":
                 help_text = f"""🤖 **Adrenaline Manager**
 
 🔹 **Экономика:**
-!профиль - Ваш профиль
+!профиль - Ваш профиль (деньги, VIP)
 !бонус - Бонус раз в час
-!вип - Купить VIP
-!купитьвип [дни] - Купить VIP (1/7/30)
+!вип - Меню покупки VIP
+!купитьвип [1/7/30] - Купить VIP
 !перевод @user [сумма] - Перевести деньги
 
 🔹 **Все могут:**
@@ -493,7 +511,7 @@ while True:
                 send(peer_id, help_text, msg_id)
                 continue
             
-            # роли
+            # !роли
             if cmd == "роли":
                 roles_text = "📋 **Список ролей:**\n\n"
                 for role_num, role_name in ROLES.items():
@@ -501,7 +519,7 @@ while True:
                 send(peer_id, roles_text, msg_id)
                 continue
             
-            # стафф
+            # !стафф
             if cmd == "стафф" and user_role >= 30:
                 staff_list = []
                 for uid, udata in user_data.items():
@@ -517,7 +535,7 @@ while True:
                     send(peer_id, "📋 Нет участников с ролями", msg_id)
                 continue
             
-            # выдатьроль
+            # !выдатьроль
             if cmd == "выдатьроль" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -539,11 +557,11 @@ while True:
                                 user_data[str(target)]["role"] = new_role
                                 save_data()
                                 send(peer_id, f"✅ {get_link(target)} получил роль: {get_role_name(new_role)}", msg_id)
-                        except:
+                        except ValueError:
                             send(peer_id, "❌ Укажите число роли", msg_id)
                 continue
             
-            # снятьроль
+            # !снятьроль
             if cmd == "снятьроль" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -557,7 +575,7 @@ while True:
                         send(peer_id, "❌ У пользователя нет роли", msg_id)
                 continue
             
-            # ник
+            # !ник
             if cmd == "ник" and user_role >= 100:
                 parts_args = args.split(maxsplit=2)
                 if len(parts_args) < 2:
@@ -567,7 +585,7 @@ while True:
                     if not target:
                         send(peer_id, "❌ Укажите пользователя (@)", msg_id)
                     else:
-                        new_nick = parts_args[1][:30] if len(parts_args) > 1 else ""
+                        new_nick = parts_args[1][:30]
                         if str(target) not in user_data:
                             user_data[str(target)] = {"role": 0, "warns": 0}
                         user_data[str(target)]["nickname"] = new_nick
@@ -575,7 +593,7 @@ while True:
                         send(peer_id, f"✅ {get_link(target)} → ник: {new_nick}", msg_id)
                 continue
             
-            # удалитьник
+            # !удалитьник
             if cmd == "удалитьник" and user_role >= 100:
                 target = get_target_user(text, event)
                 if not target:
@@ -589,7 +607,7 @@ while True:
                         send(peer_id, "❌ Нет ника", msg_id)
                 continue
             
-            # списокников
+            # !списокников
             if cmd == "списокников" and user_role >= 100:
                 nicks = []
                 for uid, udata in user_data.items():
@@ -601,7 +619,7 @@ while True:
                     send(peer_id, "📝 Ников нет", msg_id)
                 continue
             
-            # варн
+            # !варн
             if cmd == "варн" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -623,7 +641,7 @@ while True:
                     save_data()
                 continue
             
-            # мут
+            # !мут
             if cmd == "мут" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -641,7 +659,7 @@ while True:
                     send(peer_id, f"🔇 {get_link(target)} замьючен на {minutes} мин!", msg_id)
                 continue
             
-            # снятьмут
+            # !снятьмут
             if cmd == "снятьмут" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -651,7 +669,7 @@ while True:
                     send(peer_id, f"✅ {get_link(target)} размьючен", msg_id)
                 continue
             
-            # кик
+            # !кик
             if cmd == "кик" and user_role >= 30:
                 target = get_target_user(text, event)
                 if not target:
@@ -663,16 +681,16 @@ while True:
                         send(peer_id, "❌ Ошибка. Бот админ?", msg_id)
                 continue
             
-            # тишина
+            # !тишина
             if cmd == "тишина" and user_role >= 30:
                 if str(peer_id) not in silence_mode:
                     silence_mode[str(peer_id)] = False
                 silence_mode[str(peer_id)] = not silence_mode[str(peer_id)]
                 save_data()
                 if silence_mode[str(peer_id)]:
-                    send(peer_id, f"🔇 **ТИШИНА ВКЛЮЧЕНА!**\nНе-админы будут кикаться.", msg_id)
+                    send(peer_id, "🔇 **ТИШИНА ВКЛЮЧЕНА!**\nНе-админы будут кикаться.", msg_id)
                 else:
-                    send(peer_id, f"🔈 **Тишина выключена**", msg_id)
+                    send(peer_id, "🔈 **Тишина выключена**", msg_id)
                 continue
                 
     except Exception as e:
@@ -681,5 +699,5 @@ while True:
         time.sleep(5)
         try:
             vk_session, vk, longpoll = create_session()
-        except:
-            print("❌ Не удалось переподключиться")
+        except Exception as ex:
+            print(f"❌ Не удалось переподключиться: {ex}")
