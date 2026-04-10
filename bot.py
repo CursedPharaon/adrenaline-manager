@@ -3,6 +3,7 @@ import random
 import os
 import time
 import sqlite3
+import socket
 from flask import Flask
 from threading import Thread
 from vk_api.longpoll import VkLongPoll, VkEventType
@@ -18,8 +19,7 @@ if not VK_TOKEN:
     exit(1)
 
 if not GROUP_ID:
-    print("❌ Ошибка: GROUP_ID не указан в переменных окружения!")
-    print("💡 Добавьте переменную GROUP_ID с ID вашего сообщества")
+    print("❌ Ошибка: GROUP_ID не указан!")
     exit(1)
 
 GROUP_ID = int(GROUP_ID)
@@ -30,7 +30,6 @@ try:
     vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
     vk = vk_session.get_api()
     
-    # Проверяем токен через groups.getById с явным group_id
     try:
         group_info = vk.groups.getById(group_id=GROUP_ID)
         print(f"✅ Авторизация успешна! Группа: {group_info[0]['name']}")
@@ -130,10 +129,10 @@ def get_top(limit=10):
     cursor.execute("SELECT user_id, money FROM users ORDER BY money DESC LIMIT ?", (limit,))
     return cursor.fetchall()
 
-# === ИНИЦИАЛИЗАЦИЯ LONGPOLL С GROUP_ID ===
+# === ИНИЦИАЛИЗАЦИЯ LONGPOLL ===
 try:
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, wait=25)
-    print("✅ LongPoll запущен с GROUP_ID")
+    print("✅ LongPoll запущен")
 except Exception as e:
     print(f"❌ Ошибка LongPoll: {e}")
     exit(1)
@@ -182,6 +181,19 @@ def get_shop_keyboard():
     keyboard.add_button('⬅️ Назад', color=VkKeyboardColor.NEGATIVE)
     return keyboard.get_keyboard()
 
+# === ФУНКЦИЯ ПОИСКА СВОБОДНОГО ПОРТА ===
+def find_free_port(start_port=10000, max_port=10100):
+    """Ищет свободный порт в заданном диапазоне"""
+    for port in range(start_port, max_port):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(('0.0.0.0', port))
+            sock.close()
+            return port
+        except OSError:
+            continue
+    return 10000  # fallback
+
 # === FLASK ДЛЯ АНТИ-СНА ===
 app = Flask(__name__)
 
@@ -190,8 +202,17 @@ def home():
     return "🤖 Бот работает!"
 
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    # Получаем порт из переменных окружения или ищем свободный
+    port = int(os.environ.get('PORT', 0))
+    if port == 0:
+        port = find_free_port()
+        print(f"🔍 Найден свободный порт: {port}")
+    
+    try:
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"⚠️ Ошибка запуска Flask: {e}")
+        print("💡 Бот продолжит работу без веб-сервера")
 
 # === ОСНОВНОЙ ЦИКЛ ===
 def run_bot():
@@ -211,7 +232,6 @@ def run_bot():
             reg_user(user_id)
             user = get_user(user_id)
             
-            # === КОМАНДЫ ===
             if text in ['начать', 'старт', 'меню']:
                 vk.messages.send(peer_id=peer_id, message="🎮 Добро пожаловать в игру!", keyboard=get_main_keyboard(), random_id=get_random_id())
             
@@ -357,5 +377,9 @@ def run_bot():
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
-    Thread(target=run_flask, daemon=True).start()
+    # Запускаем Flask в фоне (не обязательно для работы бота)
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Запускаем бота
     run_bot()
