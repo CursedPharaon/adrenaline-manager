@@ -11,10 +11,16 @@ from vk_api.utils import get_random_id
 
 # === НАСТРОЙКИ ===
 VK_TOKEN = os.environ.get('VK_TOKEN')
+GROUP_ID = os.environ.get('GROUP_ID')  # Добавьте в переменные окружения на Render
 
 if not VK_TOKEN:
     print("❌ Ошибка: VK_TOKEN не найден в переменных окружения!")
     exit(1)
+
+if GROUP_ID:
+    GROUP_ID = int(GROUP_ID)
+else:
+    print("⚠️ GROUP_ID не указан, пробуем без него")
 
 # === БАЗА ДАННЫХ ===
 conn = sqlite3.connect('game.db', check_same_thread=False)
@@ -106,14 +112,29 @@ def get_top(limit=10):
 
 # === ИНИЦИАЛИЗАЦИЯ VK ===
 try:
-    vk_session = vk_api.VkApi(token=VK_TOKEN)
+    # Указываем версию API 5.199
+    vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
     vk = vk_session.get_api()
-    print("✅ Авторизация ВК успешна!")
+    
+    # Проверка токена
+    try:
+        group_info = vk.groups.getById()
+        print(f"✅ Авторизация успешна! Группа: {group_info[0]['name']}")
+    except Exception as e:
+        print(f"❌ Ошибка авторизации (проверьте токен): {e}")
+        exit(1)
+        
 except Exception as e:
-    print(f"❌ Ошибка авторизации: {e}")
+    print(f"❌ Ошибка инициализации: {e}")
     exit(1)
 
-longpoll = VkLongPoll(vk_session)
+# Инициализация LongPoll
+if GROUP_ID:
+    longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, wait=25)
+    print(f"✅ LongPoll запущен для группы ID: {GROUP_ID}")
+else:
+    longpoll = VkLongPoll(vk_session, wait=25)
+    print("✅ LongPoll запущен (без group_id)")
 
 # === ЦЕНЫ И РАБОТЫ ===
 PRICES = {
@@ -183,13 +204,18 @@ def run_flask():
 
 # === ОСНОВНОЙ ЦИКЛ ===
 def run_bot():
-    print("🤖 Бот запущен и готов к работе!")
+    print("🤖 Бот запущен и слушает сообщения...")
+    print("📝 Отправьте 'меню' в сообщения группы для начала работы")
     
     for event in longpoll.listen():
+        print(f"📨 Получено событие: {event.type}")  # Отладка
+        
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.lower() if event.text else ""
             peer_id = event.peer_id
+            
+            print(f"💬 Сообщение от {user_id}: {text}")  # Отладка
             
             reg_user(user_id)
             user = get_user(user_id)
@@ -428,6 +454,9 @@ def run_bot():
             
             elif text == '⬅️ назад':
                 vk.messages.send(peer_id=peer_id, message="🏠 Главное меню:", keyboard=get_main_keyboard(), random_id=get_random_id())
+            
+            else:
+                vk.messages.send(peer_id=peer_id, message="❓ Неизвестная команда. Напишите 'меню' для списка команд.", random_id=get_random_id())
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
