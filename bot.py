@@ -11,16 +11,15 @@ from vk_api.utils import get_random_id
 
 # === НАСТРОЙКИ ===
 VK_TOKEN = os.environ.get('VK_TOKEN')
-GROUP_ID = os.environ.get('GROUP_ID')  # Добавьте в переменные окружения на Render
 
 if not VK_TOKEN:
     print("❌ Ошибка: VK_TOKEN не найден в переменных окружения!")
     exit(1)
 
+# GROUP_ID не обязателен
+GROUP_ID = os.environ.get('GROUP_ID')
 if GROUP_ID:
     GROUP_ID = int(GROUP_ID)
-else:
-    print("⚠️ GROUP_ID не указан, пробуем без него")
 
 # === БАЗА ДАННЫХ ===
 conn = sqlite3.connect('game.db', check_same_thread=False)
@@ -112,7 +111,6 @@ def get_top(limit=10):
 
 # === ИНИЦИАЛИЗАЦИЯ VK ===
 try:
-    # Указываем версию API 5.199
     vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
     vk = vk_session.get_api()
     
@@ -128,13 +126,13 @@ except Exception as e:
     print(f"❌ Ошибка инициализации: {e}")
     exit(1)
 
-# Инициализация LongPoll
+# Инициализация LongPoll (работает и без group_id)
 if GROUP_ID:
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, wait=25)
     print(f"✅ LongPoll запущен для группы ID: {GROUP_ID}")
 else:
     longpoll = VkLongPoll(vk_session, wait=25)
-    print("✅ LongPoll запущен (без group_id)")
+    print("✅ LongPoll запущен")
 
 # === ЦЕНЫ И РАБОТЫ ===
 PRICES = {
@@ -208,14 +206,14 @@ def run_bot():
     print("📝 Отправьте 'меню' в сообщения группы для начала работы")
     
     for event in longpoll.listen():
-        print(f"📨 Получено событие: {event.type}")  # Отладка
+        print(f"📨 Получено событие: {event.type}")
         
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.lower() if event.text else ""
             peer_id = event.peer_id
             
-            print(f"💬 Сообщение от {user_id}: {text}")  # Отладка
+            print(f"💬 Сообщение от {user_id}: {text}")
             
             reg_user(user_id)
             user = get_user(user_id)
