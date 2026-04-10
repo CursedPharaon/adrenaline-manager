@@ -16,10 +16,36 @@ if not VK_TOKEN:
     print("❌ Ошибка: VK_TOKEN не найден в переменных окружения!")
     exit(1)
 
-# GROUP_ID не обязателен
-GROUP_ID = os.environ.get('GROUP_ID')
-if GROUP_ID:
-    GROUP_ID = int(GROUP_ID)
+print(f"📋 Токен загружен, длина: {len(VK_TOKEN)} символов")
+
+# === ПРОВЕРКА ТОКЕНА ===
+try:
+    vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
+    vk = vk_session.get_api()
+    
+    # Пробуем получить информацию о группе
+    try:
+        group_info = vk.groups.getById()
+        group_name = group_info[0]['name']
+        group_id = group_info[0]['id']
+        print(f"✅ Авторизация успешна!")
+        print(f"📌 Группа: {group_name}")
+        print(f"📌 ID группы: {group_id}")
+    except vk_api.exceptions.ApiError as e:
+        print(f"❌ Ошибка API: {e}")
+        if "access_token" in str(e):
+            print("💡 Токен недействителен. Проверьте:")
+            print("   1. Токен должен быть от ГРУППЫ, а не пользователя")
+            print("   2. При создании токена поставьте галочку 'Разрешить приложению доступ к управлению сообществом'")
+            print("   3. Токен должен начинаться с 'vk1.a...'")
+        exit(1)
+    except Exception as e:
+        print(f"❌ Неизвестная ошибка: {e}")
+        exit(1)
+        
+except Exception as e:
+    print(f"❌ Ошибка инициализации VK API: {e}")
+    exit(1)
 
 # === БАЗА ДАННЫХ ===
 conn = sqlite3.connect('game.db', check_same_thread=False)
@@ -109,30 +135,13 @@ def get_top(limit=10):
     cursor.execute("SELECT user_id, money FROM users ORDER BY money DESC LIMIT ?", (limit,))
     return cursor.fetchall()
 
-# === ИНИЦИАЛИЗАЦИЯ VK ===
+# === ИНИЦИАЛИЗАЦИЯ LONGPOLL ===
 try:
-    vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
-    vk = vk_session.get_api()
-    
-    # Проверка токена
-    try:
-        group_info = vk.groups.getById()
-        print(f"✅ Авторизация успешна! Группа: {group_info[0]['name']}")
-    except Exception as e:
-        print(f"❌ Ошибка авторизации (проверьте токен): {e}")
-        exit(1)
-        
-except Exception as e:
-    print(f"❌ Ошибка инициализации: {e}")
-    exit(1)
-
-# Инициализация LongPoll (работает и без group_id)
-if GROUP_ID:
-    longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, wait=25)
-    print(f"✅ LongPoll запущен для группы ID: {GROUP_ID}")
-else:
     longpoll = VkLongPoll(vk_session, wait=25)
     print("✅ LongPoll запущен")
+except Exception as e:
+    print(f"❌ Ошибка LongPoll: {e}")
+    exit(1)
 
 # === ЦЕНЫ И РАБОТЫ ===
 PRICES = {
