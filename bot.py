@@ -4,6 +4,7 @@ import os
 import time
 import sqlite3
 import socket
+import sys
 from flask import Flask
 from threading import Thread
 from vk_api.longpoll import VkLongPoll, VkEventType
@@ -16,30 +17,36 @@ GROUP_ID = os.environ.get('GROUP_ID')
 
 if not VK_TOKEN:
     print("❌ Ошибка: VK_TOKEN не найден!")
-    exit(1)
+    sys.exit(1)
 
 if not GROUP_ID:
     print("❌ Ошибка: GROUP_ID не указан!")
-    exit(1)
+    sys.exit(1)
 
 GROUP_ID = int(GROUP_ID)
-print(f"📋 Токен загружен, GROUP_ID: {GROUP_ID}")
+print(f"📋 Токен загружен, длина: {len(VK_TOKEN)} символов")
+print(f"📋 GROUP_ID: {GROUP_ID}")
 
-# === ПРОВЕРКА ТОКЕНА ===
+# === ПРОВЕРКА ТОКЕНА (БЕЗ groups.getById) ===
 try:
     vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
     vk = vk_session.get_api()
     
+    # Пробуем простой метод — получить информацию о себе (пользователе)
     try:
-        group_info = vk.groups.getById(group_id=GROUP_ID)
-        print(f"✅ Авторизация успешна! Группа: {group_info[0]['name']}")
+        user_info = vk.users.get()
+        print(f"✅ Токен действителен! Привязан к пользователю ID: {user_info[0]['id']}")
     except vk_api.exceptions.ApiError as e:
         print(f"❌ Ошибка API: {e}")
-        exit(1)
+        print("💡 Возможные причины:")
+        print("   1. Токен просрочен или недействителен")
+        print("   2. Токен создан без прав доступа")
+        print("   3. Токен не от сообщества")
+        sys.exit(1)
         
 except Exception as e:
-    print(f"❌ Ошибка: {e}")
-    exit(1)
+    print(f"❌ Ошибка инициализации: {e}")
+    sys.exit(1)
 
 # === БАЗА ДАННЫХ ===
 conn = sqlite3.connect('game.db', check_same_thread=False)
@@ -132,12 +139,12 @@ def get_top(limit=10):
 # === ИНИЦИАЛИЗАЦИЯ LONGPOLL ===
 try:
     longpoll = VkLongPoll(vk_session, group_id=GROUP_ID, wait=25)
-    print("✅ LongPoll запущен")
+    print("✅ LongPoll запущен успешно!")
 except Exception as e:
     print(f"❌ Ошибка LongPoll: {e}")
-    exit(1)
+    sys.exit(1)
 
-# === ЦЕНЫ И РАБОТЫ ===
+# === ЦЕНЫ ===
 PRICES = {
     "business": {"Ларёк": 100, "Магазин": 500, "Ресторан": 2000},
     "house": {"Квартира": 200, "Дом": 1000, "Вилла": 5000},
@@ -152,8 +159,6 @@ JOBS = {
     "Бизнесмен": 150
 }
 
-pending_clans = {}
-
 # === КЛАВИАТУРЫ ===
 def get_main_keyboard():
     keyboard = VkKeyboard(one_time=False)
@@ -167,8 +172,6 @@ def get_main_keyboard():
     keyboard.add_button('🎁 Бонус', color=VkKeyboardColor.POSITIVE)
     keyboard.add_line()
     keyboard.add_button('🏆 Топ', color=VkKeyboardColor.SECONDARY)
-    keyboard.add_button('👥 Клан', color=VkKeyboardColor.PRIMARY)
-    keyboard.add_line()
     keyboard.add_button('📋 Помощь', color=VkKeyboardColor.SECONDARY)
     return keyboard.get_keyboard()
 
@@ -181,66 +184,55 @@ def get_shop_keyboard():
     keyboard.add_button('⬅️ Назад', color=VkKeyboardColor.NEGATIVE)
     return keyboard.get_keyboard()
 
-# === ФУНКЦИЯ ПОИСКА СВОБОДНОГО ПОРТА ===
-def find_free_port(start_port=10000, max_port=10100):
-    """Ищет свободный порт в заданном диапазоне"""
-    for port in range(start_port, max_port):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(('0.0.0.0', port))
-            sock.close()
-            return port
-        except OSError:
-            continue
-    return 10000  # fallback
-
-# === FLASK ДЛЯ АНТИ-СНА ===
+# === FLASK ===
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 Бот работает!"
+    return "OK"
 
 def run_flask():
-    # Получаем порт из переменных окружения или ищем свободный
-    port = int(os.environ.get('PORT', 0))
-    if port == 0:
-        port = find_free_port()
-        print(f"🔍 Найден свободный порт: {port}")
-    
+    port = int(os.environ.get('PORT', 10000))
     try:
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-    except Exception as e:
-        print(f"⚠️ Ошибка запуска Flask: {e}")
-        print("💡 Бот продолжит работу без веб-сервера")
+    except:
+        pass
 
 # === ОСНОВНОЙ ЦИКЛ ===
 def run_bot():
     print("🤖 Бот запущен и слушает сообщения...")
-    print("📝 Отправьте 'меню' в сообщения группы")
+    print("📝 Отправьте 'меню' в ЛС группы")
     
     for event in longpoll.listen():
-        print(f"📨 Событие: {event.type}")
-        
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
             user_id = event.user_id
             text = event.text.lower() if event.text else ""
             peer_id = event.peer_id
             
-            print(f"💬 {user_id}: {text}")
-            
             reg_user(user_id)
             user = get_user(user_id)
             
             if text in ['начать', 'старт', 'меню']:
-                vk.messages.send(peer_id=peer_id, message="🎮 Добро пожаловать в игру!", keyboard=get_main_keyboard(), random_id=get_random_id())
+                vk.messages.send(
+                    peer_id=peer_id,
+                    message="🎮 Добро пожаловать в игру!",
+                    keyboard=get_main_keyboard(),
+                    random_id=get_random_id()
+                )
             
             elif text == '👤 профиль':
-                msg = f"👤 Профиль:\n💰 Баланс: {user['money']} руб.\n💼 Бизнес: {user['business']}\n🏠 Дом: {user['house']}\n👕 Одежда: {user['clothes']}\n👥 Клан: {user['clan']}\n💪 Работа: {user['job']}"
+                msg = f"""
+👤 Профиль:
+💰 Баланс: {user['money']} руб.
+💼 Бизнес: {user['business']}
+🏠 Дом: {user['house']}
+👕 Одежда: {user['clothes']}
+💪 Работа: {user['job']}
+"""
                 vk.messages.send(peer_id=peer_id, message=msg, random_id=get_random_id())
             
             elif text == '💰 баланс':
-                vk.messages.send(peer_id=peer_id, message=f"💰 Баланс: {user['money']} руб.", random_id=get_random_id())
+                vk.messages.send(peer_id=peer_id, message=f"💰 Ваш баланс: {user['money']} руб.", random_id=get_random_id())
             
             elif text == '💼 работа':
                 if user['job'] == 'Безработный':
@@ -255,7 +247,7 @@ def run_bot():
                     if can_work(user_id):
                         salary = JOBS[user['job']]
                         add_money(user_id, salary)
-                        vk.messages.send(peer_id=peer_id, message=f"💼 +{salary} руб.", keyboard=get_main_keyboard(), random_id=get_random_id())
+                        vk.messages.send(peer_id=peer_id, message=f"💼 Вы заработали {salary} руб.", keyboard=get_main_keyboard(), random_id=get_random_id())
                     else:
                         vk.messages.send(peer_id=peer_id, message="⏳ Работать можно раз в час!", random_id=get_random_id())
             
@@ -271,7 +263,6 @@ def run_bot():
                         ("💰 Ограбление банка!", random.randint(100, 300)),
                         ("💊 Продажа товара", random.randint(50, 150)),
                         ("🚓 Полиция!", -random.randint(50, 200)),
-                        ("💀 Конкуренты", -random.randint(30, 100)),
                         ("🍀 Джекпот!", random.randint(500, 1000))
                     ]
                     msg, amount = random.choice(outcomes)
@@ -284,23 +275,26 @@ def run_bot():
                 if can_bonus(user_id):
                     bonus = random.randint(25, 75)
                     add_money(user_id, bonus)
-                    vk.messages.send(peer_id=peer_id, message=f"🎁 +{bonus} руб.", keyboard=get_main_keyboard(), random_id=get_random_id())
+                    vk.messages.send(peer_id=peer_id, message=f"🎁 Ежедневный бонус: {bonus} руб.", keyboard=get_main_keyboard(), random_id=get_random_id())
                 else:
                     vk.messages.send(peer_id=peer_id, message="⏳ Бонус раз в 24 часа!", random_id=get_random_id())
             
             elif text == '🛒 магазин':
-                vk.messages.send(peer_id=peer_id, message="🛒 Категория:", keyboard=get_shop_keyboard(), random_id=get_random_id())
+                vk.messages.send(peer_id=peer_id, message="🛒 Выберите категорию:", keyboard=get_shop_keyboard(), random_id=get_random_id())
             
             elif text == '🏪 бизнес':
                 msg = "🏪 Бизнесы:\n" + "\n".join([f"{n}: {p} руб." for n, p in PRICES['business'].items()])
+                msg += "\n\nНапишите: купить бизнес [название]"
                 vk.messages.send(peer_id=peer_id, message=msg, random_id=get_random_id())
             
             elif text == '🏠 дома':
                 msg = "🏠 Дома:\n" + "\n".join([f"{n}: {p} руб." for n, p in PRICES['house'].items()])
+                msg += "\n\nНапишите: купить дом [название]"
                 vk.messages.send(peer_id=peer_id, message=msg, random_id=get_random_id())
             
             elif text == '👕 одежда':
                 msg = "👕 Одежда:\n" + "\n".join([f"{n}: {p} руб." for n, p in PRICES['clothes'].items()])
+                msg += "\n\nНапишите: купить одежду [название]"
                 vk.messages.send(peer_id=peer_id, message=msg, random_id=get_random_id())
             
             elif text.startswith('купить бизнес '):
@@ -338,7 +332,7 @@ def run_bot():
             
             elif text == '🏆 топ':
                 top = get_top(10)
-                msg = "🏆 Топ-10:\n"
+                msg = "🏆 Топ-10 богачей:\n"
                 for i, (uid, money) in enumerate(top, 1):
                     try:
                         user_info = vk.users.get(user_ids=uid)[0]
@@ -360,16 +354,20 @@ def run_bot():
                             target_id = int(target_str)
                         
                         if target_id == user_id:
-                            vk.messages.send(peer_id=peer_id, message="❌ Нельзя себе!", random_id=get_random_id())
+                            vk.messages.send(peer_id=peer_id, message="❌ Нельзя перевести себе!", random_id=get_random_id())
                         elif transfer_money(user_id, target_id, amount):
                             vk.messages.send(peer_id=peer_id, message=f"✅ Переведено {amount} руб.", random_id=get_random_id())
+                            try:
+                                vk.messages.send(user_id=target_id, message=f"💰 Вам перевели {amount} руб.", random_id=get_random_id())
+                            except:
+                                pass
                         else:
                             vk.messages.send(peer_id=peer_id, message="❌ Недостаточно средств!", random_id=get_random_id())
                     except:
                         vk.messages.send(peer_id=peer_id, message="❌ Формат: перевести [сумма] [id]", random_id=get_random_id())
             
             elif text == '📋 помощь':
-                msg = "📋 Команды: Профиль, Баланс, Магазин, Работа, Мафия, Бонус, Топ, Перевести"
+                msg = "📋 Команды: Профиль, Баланс, Магазин, Работа, Мафия, Бонус, Топ, Перевести [сумма] [id]"
                 vk.messages.send(peer_id=peer_id, message=msg, random_id=get_random_id())
             
             elif text == '⬅️ назад':
@@ -377,9 +375,5 @@ def run_bot():
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
-    # Запускаем Flask в фоне (не обязательно для работы бота)
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Запускаем бота
+    Thread(target=run_flask, daemon=True).start()
     run_bot()
