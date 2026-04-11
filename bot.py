@@ -368,7 +368,22 @@ def run_bot():
                     random_id=get_random_id()
                 )
 
-# === ЗАПУСК ===
-if __name__ == '__main__':
-    Thread(target=run_flask, daemon=True).start()
-    run_bot()
+# === def run_bot():
+    print("🤖 Бот запущен и слушает сообщения...")
+    print("📝 Отправьте 'меню' в ЛС группы")
+    
+    for event in longpoll.listen():
+        print(f"📨 Событие: {event.type}")
+        
+        if event.type == VkEventType.MESSAGE_NEW:
+            print(f"💬 От кого: {event.user_id}")
+            print(f"💬 Текст: {event.text}")
+            print(f"💬 to_me: {event.to_me}")
+            print(f"💬 peer_id: {event.peer_id}")
+            
+            if event.to_me:
+                vk.messages.send(
+                    peer_id=event.peer_id,
+                    message="Я слышу тебя! 👋",
+                    random_id=get_random_id()
+                )
