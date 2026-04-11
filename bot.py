@@ -2,44 +2,48 @@ import vk_api
 import random
 import time
 import os
-import sys
 from threading import Thread
 from flask import Flask
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from vk_api.utils import get_random_id
 
-# === FLASK ДЛЯ RENDER (ДОЛЖЕН БЫТЬ В ОСНОВНОМ ПОТОКЕ) ===
+# === FLASK ===
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "OK"
 
-# === НАСТРОЙКИ ===
+# === ДАННЫЕ ===
 VK_TOKEN = os.environ.get('VK_TOKEN')
 GROUP_ID = os.environ.get('GROUP_ID')
 
 if not VK_TOKEN or not GROUP_ID:
-    print("❌ Нет VK_TOKEN или GROUP_ID!")
-    sys.exit(1)
+    print("Нет VK_TOKEN или GROUP_ID")
+    exit(1)
 
 GROUP_ID = int(GROUP_ID)
 
-# === VK API ===
+# === VK ===
 vk_session = vk_api.VkApi(token=VK_TOKEN, api_version='5.199')
 vk = vk_session.get_api()
 longpoll = VkBotLongPoll(vk_session, group_id=GROUP_ID)
 
-# === ХРАНИЛИЩЕ ===
+# === БАЗА ===
 users = {}
 
 def get_user(uid):
     if uid not in users:
         users[uid] = {
-            "money": 100, "job": "Безработный", "business": "Нет",
-            "house": "Нет", "clothes": "Нет",
-            "last_work": 0, "last_mafia": 0, "last_bonus": 0
+            "money": 100,
+            "job": "Безработный",
+            "business": "Нет",
+            "house": "Нет",
+            "clothes": "Нет",
+            "last_work": 0,
+            "last_mafia": 0,
+            "last_bonus": 0
         }
     return users[uid]
 
@@ -74,9 +78,9 @@ def shop_keyboard():
     k.add_button('⬅️ Назад', VkKeyboardColor.NEGATIVE)
     return k.get_keyboard()
 
-# === ФУНКЦИЯ БОТА (ЗАПУСКАЕТСЯ В ПОТОКЕ) ===
+# === БОТ ===
 def run_bot():
-    print("🤖 Бот запущен в потоке!")
+    print("Бот слушает...")
     for event in longpoll.listen():
         if event.type == VkBotEventType.MESSAGE_NEW:
             msg = event.obj['message']
@@ -85,20 +89,30 @@ def run_bot():
             peer_id = msg['peer_id']
             user = get_user(uid)
             
+            # МЕНЮ
             if text in ['меню', 'начать', 'старт', 'menu']:
-                vk.messages.send(peer_id=peer_id, message="🎮 Добро пожаловать!", keyboard=main_keyboard(), random_id=get_random_id())
+                vk.messages.send(
+                    peer_id=peer_id,
+                    message="🎮 Добро пожаловать!",
+                    keyboard=main_keyboard(),
+                    random_id=get_random_id()
+                )
             
+            # ПРОФИЛЬ
             elif text in ['профиль', '👤 профиль']:
                 m = f"👤 Профиль\n💰 {user['money']} руб.\n💼 {user['job']}\n🏪 {user['business']}\n🏠 {user['house']}\n👕 {user['clothes']}"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # БАЛАНС
             elif text in ['баланс', '💰 баланс']:
                 vk.messages.send(peer_id=peer_id, message=f"💰 {user['money']} руб.", random_id=get_random_id())
             
+            # РАБОТА
             elif text in ['работа', '💼 работа']:
                 if user['job'] == 'Безработный':
                     k = VkKeyboard(one_time=True)
-                    for j in JOBS: k.add_button(f"Устроиться {j}", VkKeyboardColor.PRIMARY)
+                    for j in JOBS:
+                        k.add_button(f"Устроиться {j}", VkKeyboardColor.PRIMARY)
                     k.add_line()
                     k.add_button('⬅️ Назад', VkKeyboardColor.NEGATIVE)
                     vk.messages.send(peer_id=peer_id, message="Выберите:", keyboard=k.get_keyboard(), random_id=get_random_id())
@@ -112,12 +126,14 @@ def run_bot():
                         r = int(3600 - (time.time() - user['last_work']))
                         vk.messages.send(peer_id=peer_id, message=f"⏳ Ждите {r//60} мин.", random_id=get_random_id())
             
+            # УСТРОИТЬСЯ
             elif text.startswith('устроиться '):
                 j = text.replace('устроиться ', '').capitalize()
                 if j in JOBS:
                     user['job'] = j
                     vk.messages.send(peer_id=peer_id, message=f"✅ {j}", keyboard=main_keyboard(), random_id=get_random_id())
             
+            # МАФИЯ
             elif text in ['мафия', '🔫 мафия']:
                 if time.time() - user['last_mafia'] >= 1800:
                     r = random.randint(1, 100)
@@ -139,6 +155,7 @@ def run_bot():
                     r = int(1800 - (time.time() - user['last_mafia']))
                     vk.messages.send(peer_id=peer_id, message=f"⏳ Ждите {r//60} мин.", random_id=get_random_id())
             
+            # БОНУС
             elif text in ['бонус', '🎁 бонус']:
                 if time.time() - user['last_bonus'] >= 86400:
                     b = random.randint(25, 75)
@@ -148,21 +165,29 @@ def run_bot():
                 else:
                     vk.messages.send(peer_id=peer_id, message="⏳ Раз в 24 часа!", random_id=get_random_id())
             
+            # МАГАЗИН
             elif text in ['магазин', '🛒 магазин']:
                 vk.messages.send(peer_id=peer_id, message="🛒 Категория:", keyboard=shop_keyboard(), random_id=get_random_id())
             
+            # БИЗНЕС
             elif text in ['бизнес', '🏪 бизнес']:
-                m = "🏪 Бизнесы:\n" + "\n".join([f"{n}: {p} руб." for n, p in BUSINESS.items()]) + "\n\nкупить бизнес [название]"
+                m = "🏪 Бизнесы:\n" + "\n".join([f"{n}: {p} руб." for n, p in BUSINESS.items()])
+                m += "\n\nкупить бизнес [название]"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # ДОМА
             elif text in ['дома', '🏠 дома']:
-                m = "🏠 Дома:\n" + "\n".join([f"{n}: {p} руб." for n, p in HOUSE.items()]) + "\n\nкупить дом [название]"
+                m = "🏠 Дома:\n" + "\n".join([f"{n}: {p} руб." for n, p in HOUSE.items()])
+                m += "\n\nкупить дом [название]"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # ОДЕЖДА
             elif text in ['одежда', '👕 одежда']:
-                m = "👕 Одежда:\n" + "\n".join([f"{n}: {p} руб." for n, p in CLOTHES.items()]) + "\n\nкупить одежду [название]"
+                m = "👕 Одежда:\n" + "\n".join([f"{n}: {p} руб." for n, p in CLOTHES.items()])
+                m += "\n\nкупить одежду [название]"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # КУПИТЬ БИЗНЕС
             elif text.startswith('купить бизнес '):
                 i = text.replace('купить бизнес ', '').capitalize()
                 if i in BUSINESS:
@@ -174,6 +199,7 @@ def run_bot():
                     else:
                         vk.messages.send(peer_id=peer_id, message=f"❌ Нужно {p} руб.", random_id=get_random_id())
             
+            # КУПИТЬ ДОМ
             elif text.startswith('купить дом '):
                 i = text.replace('купить дом ', '').capitalize()
                 if i in HOUSE:
@@ -185,6 +211,7 @@ def run_bot():
                     else:
                         vk.messages.send(peer_id=peer_id, message=f"❌ Нужно {p} руб.", random_id=get_random_id())
             
+            # КУПИТЬ ОДЕЖДУ
             elif text.startswith('купить одежду '):
                 i = text.replace('купить одежду ', '').capitalize()
                 if i in CLOTHES:
@@ -196,18 +223,22 @@ def run_bot():
                     else:
                         vk.messages.send(peer_id=peer_id, message=f"❌ Нужно {p} руб.", random_id=get_random_id())
             
+            # ТОП
             elif text in ['топ', '🏆 топ']:
                 s = sorted(users.items(), key=lambda x: x[1]['money'], reverse=True)[:10]
                 if s:
                     m = "🏆 Топ-10:\n"
                     for i, (u, d) in enumerate(s, 1):
-                        try: n = f"{vk.users.get(user_ids=u)[0]['first_name']}"
-                        except: n = f"ID{u}"
+                        try:
+                            n = f"{vk.users.get(user_ids=u)[0]['first_name']}"
+                        except:
+                            n = f"ID{u}"
                         m += f"{i}. {n}: {d['money']} руб.\n"
                 else:
                     m = "🏆 Пусто"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # ПЕРЕВОД
             elif text.startswith('перевести '):
                 p = text.split()
                 if len(p) >= 3:
@@ -228,25 +259,23 @@ def run_bot():
                         else:
                             vk.messages.send(peer_id=peer_id, message="❌ Мало денег!", random_id=get_random_id())
                     except:
-                        vk.messages.send(peer_id=peer_id, message="❌ перевести 100 id123", random_id=get_random_id())
+                        vk.messages.send(peer_id=peer_id, message="❌ Формат: перевести 100 id123", random_id=get_random_id())
             
+            # ПОМОЩЬ
             elif text in ['помощь', '📋 помощь']:
                 m = "📋 Профиль, Баланс, Работа, Мафия, Бонус, Магазин, Топ, Перевести"
                 vk.messages.send(peer_id=peer_id, message=m, random_id=get_random_id())
             
+            # НАЗАД
             elif text in ['назад', '⬅️ назад']:
                 vk.messages.send(peer_id=peer_id, message="🏠 Меню", keyboard=main_keyboard(), random_id=get_random_id())
             
+            # НЕИЗВЕСТНО
             else:
                 vk.messages.send(peer_id=peer_id, message="❓ Напишите 'меню'", random_id=get_random_id())
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
-    # Запускаем бота в отдельном потоке
-    bot_thread = Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Flask запускаем в основном потоке (Render требует открытый порт)
+    Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
